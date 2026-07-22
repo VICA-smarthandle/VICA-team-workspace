@@ -1,0 +1,13 @@
+repositories:
+  vica_ros2_ws:
+    type: git
+    url: https://github.com/VICA-smarthandle/vica_ros2_ws.git
+    version: dev
+  vica-voice-llm:
+    type: git
+    url: https://github.com/VICA-smarthandle/vica-voice-llm.git
+    version: main
+  VICA_Supervisor:
+    type: git
+    url: https://github.com/myw411/VICA_Supervisor.git
+    version: main

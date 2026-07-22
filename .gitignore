@@ -1,0 +1,30 @@
+# Product repositories are fetched with workspace.repos.
+# Do not commit embedded Git repositories into the governance repository.
+/vica_ros2_ws/
+/vica-voice-llm/
+/VICA_Supervisor/
+
+# Local/generated workspace data
+/log/
+/workspaces
+/meta_prompt.txt
+/source_file/
+/.agents/
+/.codex/
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+
+# Editor/OS/cache
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+__pycache__/
+*.py[cod]
+*.swp
+*.swo
