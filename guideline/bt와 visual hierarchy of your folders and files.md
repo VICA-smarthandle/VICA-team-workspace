@@ -219,7 +219,7 @@ VICA-smarthandle/
 │       ├── vica_sensor_adapters/
 │       ├── vica_description/
 │       ├── vica_cartographer/
-│       └── rplidar_ros/                        # 빈 자리표시자, ROS 패키지 아님
+│       └── rplidar_ros/                        # 현재 실사용 RPLIDAR 드라이버(vica.repos import)
 │
 ├── vica-voice-llm/                             # 음성·의도·목적지 매칭
 │   ├── launch/
@@ -321,13 +321,15 @@ vica_ros2_ws/src/
 ├── ekf_config/                                 # 호환용 설정 사본, 정본은 vica_localization
 │   ├── ekf.yaml
 │   └── command.txt
-└── rplidar_ros/                                # [GAP] 현재 비어 있는 디렉터리
+└── rplidar_ros/                                # 현재 실사용 RPLIDAR 드라이버(vica.repos import). YDLIDAR G2 수리 중
 ```
 
-현재 `colcon list --base-paths vica_ros2_ws`로 인식되는 패키지는 9개다. `vica_localization`이
-`robot_localization` EKF 설정과 bringup의 정본이다. `ekf_config`는 호환용 사본이며
-`rplidar_ros`는 비어 있어 ROS 패키지로 인식되지 않는다. 호환 사본은 임의로 수정하지
-않고 정본 변경과 함께 동기화한다.
+`vica_ros2_ws` 자체 패키지는 9개이고, `vica.repos`로 외부 드라이버(`rplidar_ros`,
+`ydlidar_ros2_driver`, `realsense-ros`)를 import하면 `colcon list`에 16개가 나온다.
+`vica_localization`이 `robot_localization` EKF 설정과 bringup의 정본이다. `ekf_config`는
+호환용 사본이다. `rplidar_ros`는 이제 Slamtec RPLIDAR ROS 2 드라이버로 채워져 현재
+실사용 라이다이며, YDLIDAR G2는 수리 중이라 복귀 시 원복한다(2026-07-22 기준). 호환
+사본은 임의로 수정하지 않고 정본 변경과 함께 동기화한다.
 
 ## 7. 음성 저장소 핵심 파일
 

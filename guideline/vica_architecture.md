@@ -329,6 +329,11 @@ map                         Cartographer 또는 AMCL
 
 `base_footprint → base_link` 높이는 0.19 m다.
 
+현재 `/scan`을 발행하는 2D LiDAR는 YDLIDAR G2를 수리 보내 임시로 RPLIDAR를 사용한다
+(2026-07-22 기준). 위 `laser_frame` 오프셋은 YDLIDAR G2 장착 기준이므로, RPLIDAR 운용
+동안 실제 장착 위치를 실측해 URDF와 대조한다. `/scan` 토픽 계약 자체는 라이다와 무관하게
+유지된다. [미검증]
+
 ### 8.3 현재 odometry 구현
 
 ```text

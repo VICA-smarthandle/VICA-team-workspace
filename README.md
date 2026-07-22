@@ -251,6 +251,11 @@ Odometry 계약:
 현재 Nav2 `/cmd_vel → /cmd_vel_req`, 중앙 E-stop 래치·관리자 reset과 C5+D455 실기 융합은
 종단 검증 완료 상태가 아니다.
 
+2D LiDAR는 YDLIDAR G2를 수리 보내 임시로 RPLIDAR를 `/scan` 공급원으로 사용한다(2026-07-22
+기준). Nav2 costmap과 Cartographer는 공급 라이다와 무관하게 `/scan`을 입력으로 쓰므로 토픽
+계약은 유지되지만, RPLIDAR 운용 동안 `laser_frame` 장착 위치와 라이다 드라이버 launch를
+실측에 맞춰 확인한다. YDLIDAR G2 복귀 시 원복한다.
+
 ## 7. Build·검증·배포
 
 ROS 패키지 최소 검증:
