@@ -1,11 +1,18 @@
 # VICA 통합 상태 감시·즉시 피드백·자동 복구 아키텍처 초안
 
-> 문서 상태: 팀 검토용 초안
-> 작성 기준일: 2026-07-24
-> 대상: VICA ROS 2 전체 시스템, 모터 안전제어, Nav2, 사용자 안내, 음성, 앱
-> 범위: 설계 및 구현 계획 제안
-> 비범위: 소스 코드, launch, 파라미터, 펌웨어 직접 변경
-> 판정 표기: `[CURRENT]` 현재 코드·계약, `[GAP]` 미연결·미검증, `[TARGET]` 구현 전 제안
+문서 상태: 팀 검토용 초안
+작성 기준일: 2026-07-24
+기준 작업공간: 이 문서가 포함된 작업공간 루트
+대상: VICA ROS 2 전체 시스템, 모터 안전제어, Nav2, 사용자 안내, 음성, 앱
+범위: 설계 및 구현 계획 제안
+비범위: 소스 코드, launch, 파라미터, 펌웨어 직접 변경
+
+판정 표기는 `vica_architecture.md`·`vica_scenario.md`와 동일하게 사용한다.
+
+- `[CURRENT]`: 코드·설정·launch가 현재 작업공간에 존재한다.
+- `[GAP]`: 구성요소나 계약은 있으나 실제 producer/consumer 또는 launch 연결이 끊겨 있다.
+- `[TARGET]`: 현재 코드에는 없으며 이 문서가 구현 목표로 제안한다.
+- `[미검증]`: 코드는 있으나 실기기 종단 동작이 아직 검증되지 않았다.
 
 ---
 
@@ -80,7 +87,7 @@ VICA의 모터, 센서, 자율주행, 음성, LED, Smart Handle, 앱 기능을 �
 - 물리 E-stop 입력
 - CAN 응답 timeout
 - `/cmd_vel_safe` timeout
-- Smart Handle heartbeat timeout
+- Smart Handle 통신 단절 (아두이노 나노 포트·전송 실패)
 - Safety Supervisor heartbeat timeout
 - 모터 controller fault bit
 - 명령 속도와 encoder 속도의 비정상 불일치
@@ -151,7 +158,7 @@ target으로 전체 시스템을 시작하되, 모터·주행·음성·앱은 �
 ┌──────────────────────── ROS 2 Driver Layer ────────────────────────────┐
 │ mdrobot_can_keyboard_knob_node │ sensor drivers │ guidance driver     │
 │ ├ hardware state   │ ├ data         │ ├ LED / Servo / Haptic output   │
-│ ├ local watchdog   │ └ diagnostics  │ ├ handle input / heartbeat      │
+│ ├ local watchdog   │ └ diagnostics  │ ├ handle input / connected      │
 │ └ diagnostics      │                │ └ diagnostics                   │
 └──────────────┬──────────┬──────────────────────┬───────────────────────┘
                │          │                      │
@@ -320,18 +327,20 @@ ROS graph 감시는 `rosgraph_monitor`의 기능이나 라이브러리를 재사
 ### 7.1 `SafetyState`
 
 즉시 사용자 피드백과 다른 시스템의 안전 상태 확인에 사용한다.
-현재 Safety Supervisor는 `/safety_state`에 `std_msgs/String`을 발행한다. 아래
-`SafetyState` 사용자 정의 메시지는 기존 계약을 즉시 교체한다는 뜻이 아닌 `[TARGET]`이다.
-변경 시 앱과 Safety consumer를 함께 전환하고 호환·rollback 계획을 별도로 승인해야 한다.
+현재 Safety Supervisor는 `/safety_state`에 `std_msgs/String`으로 상태값을 발행하며, 확정 상태
+enum은 `vica_architecture.md` 9.3절과 동일하다(아래 `state` 필드). 아래 `SafetyState` 사용자 정의
+메시지는 이 문자열 계약을 즉시 교체한다는 뜻이 아닌 `[TARGET]`이다. 변경 시 앱과 Safety consumer를
+함께 전환하고 호환·rollback 계획을 별도로 승인해야 한다.
 
 ```text
 SafetyState
-├── state
-│   ├── SAFE_IDLE
-│   ├── MOVING
-│   ├── CONTROLLED_STOP
-│   ├── ESTOPPED
-│   └── FAULT
+├── state                          # vica_architecture.md 9.3절 확정 enum
+│   ├── IDLE                       # 사용자 미이용, 주행 명령 없음
+│   ├── RUNNING                    # 주행 승인·진행 중
+│   ├── ESTOP_ACTIVE               # E-stop 래치 활성, 즉시 정지
+│   ├── ESTOP_RELEASED_WAIT_RESET  # 원인 해제됨, 명시적 reset 대기
+│   ├── READY_TO_GO                # reset 완료, 주행 재승인 가능
+│   └── FAULT                      # 반복 복구 실패 또는 원인 불명
 ├── reason_code
 ├── stop_latched
 ├── reset_required
@@ -369,7 +378,7 @@ RobotHealth
 
 ```text
 READY =
-    safety state가 SAFE_IDLE 또는 허용 상태
+    safety state가 IDLE 또는 READY_TO_GO (허용 상태)
 AND motor_ready
 AND localization_ready
 AND navigation_ready
@@ -451,8 +460,9 @@ simulation time 변경에 영향을 덜 받는다.
 
 | 감지 항목 | 권장 판정 |
 |---|---|
-| MCU heartbeat | timeout이면 handle disconnected |
-| 사용자 접촉/그립 | 요구 조건을 벗어나면 안전정지 검토 |
+| MCU 통신 상태(`connected`) | 아두이노 나노 포트·전송 실패면 handle disconnected (heartbeat 프로토콜 미사용) |
+| 터치센서 접촉(`user_contact`) | 활성 모드에서 미감지 지속 시 유예 후 STOP (아래 참조), 비활성 모드에서는 정지 사유 아님 `[TARGET]` |
+| 스마트 핸들 모드 상태 | 활성/비활성 모드와 knob 게이팅 상태 표시 `[TARGET]` |
 | 서보 목표·실제 위치 | 오차가 일정 시간 지속되면 servo fault |
 | 서보 전류 | stall 또는 기구물 걸림 감지 |
 | LED 출력 진단 | driver/MCU fault 확인 |
@@ -463,6 +473,19 @@ simulation time 변경에 영향을 덜 받는다.
 햅틱 고장은 모터 정지 자체를 방해하지 않아야 한다. 다만 VICA의 핵심 사용자가 시각장애인이고
 햅틱이 필수 안전 알림으로 분류된다면, 주행 가능 여부 정책은 팀의 위험성 평가 결과에 따라
 `DEGRADED`가 아니라 `STOP`으로 올릴 수 있다.
+
+터치센서 미감지 판정은 스마트 핸들 모드에 따라 의미가 다르다(`vica_scenario.md` 2-1절 `[TARGET]`).
+활성 모드에서만 “터치 미감지 지속”을 정지 사유로 처리하며, 비활성 모드에서는 정지 사유가 아니다.
+활성 모드의 핸들 놓음 처리 순서는 다음과 같다. 유예·정지 지연 시간값과 최종 등급(STOP/ESTOP)은
+팀 위험성 평가로 확정한다.
+
+```text
+활성 모드에서 터치 미감지 시작
+    → 짧은 유예(예: 1~2초)
+    → 유예 초과 시 TTS 안내 후
+    → N초 경과까지 미감지 지속
+    → 감속 후 정지 (STOP 계열, 등급 팀 확정)
+```
 
 ### 8.4 Localization과 TF
 
@@ -544,7 +567,8 @@ simulation time 변경에 영향을 덜 받는다.
 | LiDAR timeout | STOP | goal 취소, 정지 | driver 최대 2회 재시작 | scan 정상 + 새 주행 승인 |
 | odom/TF timeout | STOP | goal 취소, 정지 | localization 재구성 | 품질 정상 + 새 주행 승인 |
 | Nav2 controller 오류 | STOP | goal 취소 | lifecycle reset 제한 | READY + 새 goal |
-| Smart Handle heartbeat timeout | STOP/ESTOP | 정지 | 장치 reconnect | handle 정상 + 사용자 승인 |
+| Smart Handle 통신 단절(`connected=false`) | STOP/ESTOP | 정지 | 장치 reconnect | handle 정상 + 사용자 승인 |
+| 활성 모드 터치 미감지(핸들 놓음) | STOP `[TARGET]` | 유예 → TTS 안내 → N초 후 감속·정지 | 없음(재접촉 시 정상 주행) | 터치 재감지 또는 새 주행 승인 |
 | 서보 고장 | DEGRADED/STOP | 정책에 따른 정지 | 중립 복귀 1회 | 장치 정상 |
 | 햅틱 고장 | DEGRADED/STOP | 다른 알림 활성화 | 장치 재연결 | 접근성 위험 평가에 따름 |
 | TTS 장애 | DEGRADED | 앱·LED·햅틱 사용 | process 재시작 | TTS 정상 |
@@ -566,7 +590,7 @@ simulation time 변경에 영향을 덜 받는다.
 ```text
 safety_supervisor_node
     ├── /cmd_vel_safe = 0 ───────────────▶ mdrobot_can_keyboard_knob_node
-    └── /safety_state = ESTOPPED
+    └── /safety_state = ESTOP_ACTIVE
              ├───────────────────────────▶ user_guidance_driver_node
              │                              ├── 긴급 LED
              │                              ├── 강한 햅틱
@@ -694,7 +718,7 @@ DETECTED
 | `/safety_state` | reliable, transient local, 작은 depth `[TARGET QoS]` | 늦게 연결된 노드도 최신 안전 상태 확인 |
 | `/robot/health` | reliable, transient local | 앱과 bringup 검사에서 최신 상태 즉시 확인 |
 | `/robot/events` | reliable, volatile | 이벤트 순서 전달, 과거 전체 재전송은 별도 로그 사용 |
-| `/smart_handle/state` | reliable + deadline/liveliness 검토 | heartbeat 단절 감지 |
+| `/smart_handle/state` | reliable + deadline/liveliness 검토 | `connected` 상태와 topic age로 단절 감지 (하드웨어 heartbeat 아님) |
 | `/user_guidance/turn` | reliable, depth 1, lifespan 적용 | 오래된 회전 안내 폐기 |
 | LiDAR/IMU | sensor data profile | 고주기 데이터 처리 |
 
@@ -733,7 +757,7 @@ grace period가 필요하다. 다만 motor와 Safety Supervisor의 timeout은 �
 ```text
 mission_start_allowed =
     RobotHealth.state == READY
-AND SafetyState.state == SAFE_IDLE
+AND SafetyState.state in (IDLE, READY_TO_GO)
 AND stop_latched == false
 AND motor_ready
 AND localization_ready
@@ -749,7 +773,7 @@ AND guidance_required_components_ready
 
 ### 14.1 하드웨어 내부 피드백
 
-- MCU/controller heartbeat
+- 모터 controller heartbeat·watchdog (Smart Handle 아두이노 나노는 heartbeat 미사용, `connected`로 판정)
 - hardware watchdog
 - motor current, temperature, voltage
 - encoder 속도와 위치
@@ -808,7 +832,7 @@ ROS 2 노드가 멈추어도 하드웨어가 마지막 속도로 계속 움직�
 /robot/health
 /robot/events
 /safety_state
-/cmd_vel_requested
+/cmd_vel_req
 /cmd_vel_safe
 /wheel/odom
 /odom
@@ -898,7 +922,7 @@ CI build/test
 - 필수 sensor topic rate
 - localization TF
 - Nav2 lifecycle active
-- Smart Handle heartbeat
+- Smart Handle `connected` 정상
 - active STOP/ESTOP/FAULT 없음
 
 ---
@@ -1017,6 +1041,8 @@ systemd service, release versioning, `/robot/health` 기반 배포 검사, rollb
 다음은 코드 구현 전에 안전·하드웨어·앱 담당자가 함께 결정해야 한다.
 
 1. Smart Handle 접촉 단절을 `STOP`과 `ESTOP` 중 어느 등급으로 볼 것인가?
+1-1. 활성 모드 터치 미감지의 유예 시간, TTS 안내 후 정지 지연(N초), 최종 등급은 얼마/무엇인가?
+1-2. 터치센서 모드 전환 판정과 knob 게이팅을 어느 노드가 담당하는가? (`vica_scenario.md` 2-1절 `[TARGET]`)
 2. 햅틱 또는 서보 고장 시 주행을 허용할 수 있는가?
 3. voice emergency monitor는 주행 필수 component인가?
 4. LiDAR와 localization의 timeout 및 startup grace period는 얼마인가?
