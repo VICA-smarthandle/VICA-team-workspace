@@ -432,8 +432,9 @@ reset 권한을 부여하지 않는다.
 3. 물리 버튼, 앱 입력과 음성 입력이 모두 비활성인지 확인한다.
 4. 물리 입력 상태가 fresh한지 확인한다.
 5. Nav2 action server 실행 여부와 `/cmd_vel_req` 정지 조건을 확인한다.
-6. Nav2가 실행 중이면 fresh status의 활성 Goal만 전체 취소하고, 처음부터 미실행이면 Goal
-   검사를 생략한다. 이전 status가 stale이면 reset을 거부한다.
+6. Nav2 action status의 마지막 상태가 활성 상태이면 전체 취소하고 요청 이후의 새
+   terminal 상태를 확인한다. 마지막 상태가 terminal이면 취소 호출을 생략하며, Nav2가
+   미실행이거나 Goal이 한 번도 없어 status 이력이 없으면 Goal 검사도 생략한다.
 7. fresh `/emergency_stop=false` 확인 뒤 Supervisor 내부 reset과 `READY_TO_GO`를 확인한다.
 8. 서보는 중립, LED는 일반 OFF 상태를 유지한다.
 9. 이전 goal은 자동 재개하지 않고 새 목적지 요청을 기다린다.

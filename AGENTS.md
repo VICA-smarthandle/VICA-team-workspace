@@ -68,9 +68,10 @@ motor adapter
 - Safety Supervisor가 소프트웨어 주행 명령의 최종 승인 권한을 가진다.
 - 긴급어는 LLM 추론 전에 `/vica/emergency` 전용 경로로 전달한다.
 - 물리 버튼·앱·STT E-stop은 `emergency_stop_node`에서 통합하고 중앙 래치한다.
-- `app_emergency_node`가 공개 reset을 오케스트레이션한다. Nav2 action server가 실행
-  중이면 fresh status에서 활성 Goal이 있을 때만 전체 취소하고, Nav2가 처음부터
-  미실행이면 Goal 검사를 생략한다. 이전 status가 stale이면 reset을 거부한다.
+- `app_emergency_node`가 공개 reset을 오케스트레이션한다. Nav2 action status의 마지막
+  상태가 활성 상태이면 전체 취소하고 요청 이후의 새 terminal 상태를 확인한다. 마지막
+  상태가 terminal이면 취소 호출을 생략하며, Nav2가 미실행이거나 Goal이 한 번도 없어
+  status 이력이 없으면 Goal 검사도 생략한다.
 - `emergency_stop_node`는 중앙 래치 해제, `safety_supervisor_node`는 주행 재승인을 각각
   내부 서비스로만 제공한다.
 - motor node에는 E-stop 래치·`/estop_state`·`/estop_reset`을 두지 않는다.

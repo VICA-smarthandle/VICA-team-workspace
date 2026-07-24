@@ -516,12 +516,13 @@ Safety Supervisor가 소유한다. CAN 0 RPM만으로 인명 안전을 보장하
 | `/vica_safety/internal/estop_reset` | `emergency_stop_node` | 모든 원인 해제와 물리 F1 freshness 확인 뒤 중앙 래치만 해제 |
 | `/vica_safety/internal/supervisor_reset` | `safety_supervisor_node` | fresh `/emergency_stop=false`와 `/cmd_vel_req=0` 또는 timeout 확인 뒤 재승인 |
 
-`app_emergency_node`는 앱 source를 false로 내리고 Nav2 실행 여부를 확인한다. action
-server가 실행 중이면 fresh status의 accepted, executing 또는 canceling Goal을 전체
-취소하고 terminal 상태를 확인한다. 활성 Goal이 없으면 취소 서비스를 호출하지 않는다.
-Nav2 status 수신 이력이 없고 action server도 없으면 미실행으로 판정해 Goal 검사를
-생략하지만, 이전 status가 stale이면 통신 단절 가능성으로 reset을 거부한다. 그 뒤 중앙
-래치 reset, fresh
+`app_emergency_node`는 앱 source를 false로 내리고 Nav2 action status의 마지막 상태값을
+확인한다. accepted, executing 또는 canceling Goal이면 전체 취소를 요청하고, 취소 요청
+이후의 새 terminal 상태를 확인한다. 마지막 상태가 terminal이면 취소 서비스를 호출하지
+않는다. Nav2 status 수신 이력이 없으면 Goal이 한 번도 생성되지 않은 정상 상태로 판정해
+Goal 검사를 생략하며, action server도 없으면 Nav2 미실행으로 구분한다. action status는
+주기 heartbeat가 아닌 상태 변경 이벤트이므로 메시지 나이는 reset 조건으로 사용하지
+않는다. 그 뒤 중앙 래치 reset, fresh
 `/emergency_stop=false`, Supervisor 내부 reset,
 `/safety_state=READY_TO_GO`를 순서대로 확인한다. 어느 단계든 실패하면 다음 단계로
 진행하지 않는다. 앱이나 STT의 `false`는 입력 원인 해제일 뿐 reset이 아니며 이전 Goal은

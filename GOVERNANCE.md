@@ -116,9 +116,10 @@ E-stop의 소프트웨어 권한은 다음처럼 단일화한다.
 
 - E-stop 중앙 래치와 내부 래치 해제 권한은 `emergency_stop_node`가 소유한다.
 - 공개 reset 절차(`/app_estop_reset`, 유지보수 `/safety_reset`)는
-  `app_emergency_node`가 소유한다. Nav2가 실행 중이면 fresh status의 활성 Goal만 전체
-  취소하고, 처음부터 미실행이면 Goal 검사를 생략한다. 이전 status가 stale이면 reset을
-  거부하며 최종 READY까지 오케스트레이션한다.
+  `app_emergency_node`가 소유한다. Nav2 action status의 마지막 상태가 활성 상태이면
+  전체 취소하고 요청 이후의 새 terminal 상태를 확인한다. 마지막 상태가 terminal이면
+  취소 호출을 생략하며, Nav2가 미실행이거나 Goal이 한 번도 없어 status 이력이 없으면
+  Goal 검사도 생략한다. 최종 READY까지 오케스트레이션한다.
 - 주행 출력 재승인 권한은 `safety_supervisor_node`가 소유한다.
 - motor node에는 별도 E-stop 래치, `/estop_state`, `/estop_reset`을 두지 않는다.
 - 앱·STT에서 들어오는 `false`는 해당 입력의 해제만 뜻하며 중앙 래치를 해제하지 않는다.
