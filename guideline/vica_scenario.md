@@ -104,12 +104,12 @@ LLM은 목적지 후보와 대화 응답만 제안한다. LLM, STT, TTS 및 앱�
 | blocker | 현재 상태 |
 | --- | --- |
 | 안전 명령 연결 | motor는 `/cmd_vel_safe`를 구독하도록 변경됐으나 build/runtime 검증이 필요함 |
-| Nav2 안전 입력 | Nav2의 기본 출력이 `/cmd_vel`이며 `/cmd_vel_req` 연결이 확인되지 않음 |
+| Nav2 안전 입력 | velocity smoother 최종 출력의 `/cmd_vel_req` remap은 구현, 실제 Goal·motor 종단 `[미검증]` |
 | localization 의존성 | `vica_localization` 연결과 로컬 EKF 기동은 검증했으나 시스템에 `robot_localization`, `python3-can` 설치가 필요함 |
 | wheel·IMU 실기 융합 | `/wheel/odom + /imu/base_link → EKF → /odom` 계약은 연결됐으나 C5와 D455 동시 실기 검증은 미완료 |
 | Cartographer odometry | `odom_topic=/odom` 전달과 remap은 적용됐으나 Cartographer를 포함한 실기 runtime 검증이 필요함 |
-| E-stop 중앙 래치 | `emergency_stop_node`는 입력을 OR하지만 아직 latch/reset service가 없음 |
-| reset 통합 | 앱은 server가 없는 `/estop_reset`을 호출하며 중앙 래치·Safety reset이 연결되지 않음 |
+| E-stop 중앙 래치 | `vica_safety` 코드·launch·단위 테스트 구현, 실제 F1·CAN 종단 `[미검증]` |
+| reset 통합 | 앱·유지보수 공개 서비스와 Nav2 취소·2단계 내부 reset 구현, runtime `[미검증]` |
 | TTS 통합 | Mission Manager는 `/vica/tts_request`를 발행하지만 TTS는 `/vica/intent`만 구독함 |
 | 운영 voice launch | 개발용 RobotState·state-machine stub 두 개가 아직 포함됨 |
 
@@ -326,7 +326,7 @@ E-stop 래치는 `emergency_stop_node` 하나만 소유한다. motor node에는 
 
 ### 9.2 음성 긴급정지
 
-상태: 긴급어 전달 현재 구현 / 중앙 래치·실기기 종단 검증 필요
+상태: 긴급어 전달·중앙 래치 코드 구현 / 실기기 종단 검증 필요
 
 현재 하드 정지 키워드:
 
@@ -338,8 +338,8 @@ E-stop 래치는 `emergency_stop_node` 하나만 소유한다. motor node에는 
 2. `/vica/emergency`를 발행한다.
 3. Mission Manager가 goal을 취소한다.
 4. `emergency_estop_bridge`가 `/voice_emergency_stop` 펄스를 발행한다.
-5. 현재 `emergency_stop_node`가 펄스 동안 `/emergency_stop=true`를 발행한다.
-6. 목표 구현에서는 첫 `true`를 중앙 래치하고 Safety가 `/cmd_vel_safe=0`을 유지한다.
+5. `emergency_stop_node`가 첫 `true`를 중앙 래치하고 `/emergency_stop=true`를 유지한다.
+6. Safety가 `/cmd_vel_safe=0`을 유지한다.
 
 `잠깐`, `천천히`, `느리게`는 음성 감지 목록에 있지만 현재 hard-stop bridge가 무시한다. 감속·일시정지 구현 전에는 보장된 정지 명령으로 안내하지 않는다.
 
@@ -348,7 +348,7 @@ reset 권한을 부여하지 않는다.
 
 ### 9.3 앱 긴급정지
 
-상태: activate 전달 현재 구현 / 중앙 래치·reset 통합 필요
+상태: activate·중앙 래치·reset 코드 통합 / 앱·Nav2·motor runtime 검증 필요
 
 1. 로그인한 운영자가 앱 비상정지 버튼을 누른다.
 2. 앱이 `/app_estop_activate` 서비스를 호출한다.
@@ -357,41 +357,42 @@ reset 권한을 부여하지 않는다.
 5. `/app_estop_state`로 앱 상태를 주기 발행한다.
 6. 앱은 비상정지 overlay와 결과 로그를 표시한다.
 
-현재 `app_emergency_node`는 ROS 패키지에 있지만 safety launch 두 개에는 포함되어 있지 않으므로 별도 실행 또는 통합 bringup이 필요하다.
+`app_emergency_node`는 `ros2 launch vica_safety safety_bringup.launch.py`에 포함된다.
 
 앱의 `/app_emergency_stop=false`는 앱 입력 원인의 해제만 뜻하며 중앙 래치를 해제하지
 않는다.
 
 ### 9.4 물리 긴급정지
 
-상태: CAN F1 판독 코드 현재 구현 / 기본 launch와 중앙 래치 통합 필요
+상태: CAN F1 판독·중앙 래치·기본 Safety launch 구현 / 실기 검증 필요
 
 `emergency_stop_node`는 `input_mode=can_f1`일 때 MDROBOT F1 입력 비트를 직접 읽어
 `/emergency_stop` 입력 상태에 포함한다. 물리 입력 byte/mask/active value는 실제 장비에서
 검증해야 한다.
 
-현재 `motor_safety_bringup.launch.py`는 `input_mode=test_topic`을 사용하므로 물리 CAN F1
-판독이 기본 운용에서 활성화되지 않는다. 또한 `emergency_stop_node`에는 중앙 래치가
-없다. 목표 구조에서는 물리 상태를 이 노드가 직접 받고, 앱·음성 입력과 함께 래치한
-단일 `/emergency_stop` 상태를 Mission, Safety와 앱에 전달한다.
+`vica_safety/safety_bringup.launch.py`는 `input_mode=can_f1`, `can_iface=can1`, CAN ID
+`0x701`을 사용한다. 물리 상태를 앱·음성 입력과 함께 래치한 단일
+`/emergency_stop` 상태를 Mission, Safety와 앱에 전달한다. 실제 byte/mask와 timeout
+동작은 `[미검증]`이다.
 
 ### 9.5 긴급정지 해제
 
 목표 구조:
 
-1. 로그인한 관리자가 앱의 E-stop 알림 또는 해제 화면을 연다.
-2. 앱은 위험 원인 확인과 해제 여부를 팝업으로 재확인한다.
+1. 앱 또는 유지보수 터미널이 공개 reset을 요청한다. 로그인 관리자 UI는 `[TARGET]`이다.
+2. 앱 구현 시 위험 원인 확인과 해제 여부를 팝업으로 재확인한다.
 3. 물리 버튼, 앱 입력과 음성 입력이 모두 비활성인지 확인한다.
 4. 물리 입력 상태가 fresh한지 확인한다.
-5. Nav2 goal이 취소됐고 `/cmd_vel_req`가 0인지 확인한다.
-6. 앱이 `emergency_stop_node`가 소유하는 단일 reset을 요청한다.
-7. 중앙 래치를 해제한 뒤 Safety `/safety_reset` 결과까지 확인한다.
+5. Nav2 action server 실행 여부와 `/cmd_vel_req` 정지 조건을 확인한다.
+6. Nav2가 실행 중이면 fresh status의 활성 Goal만 전체 취소하고, 처음부터 미실행이면 Goal
+   검사를 생략한다. 이전 status가 stale이면 reset을 거부한다.
+7. fresh `/emergency_stop=false` 확인 뒤 Supervisor 내부 reset과 `READY_TO_GO`를 확인한다.
 8. 서보는 중립, LED는 일반 OFF 상태를 유지한다.
 9. 이전 goal은 자동 재개하지 않고 새 목적지 요청을 기다린다.
 
-reset 요청 권한은 관리자 앱에만 둔다. 물리 버튼 해제와 앱·STT의 `false`는 reset 조건일
-뿐 reset 명령이 아니다. 현재 app node는 server가 없는 `/estop_reset`을 호출하므로 위
-절차는 아직 구현되지 않았다.
+Flutter는 `/app_estop_reset`, 유지보수 터미널은 영구 `/safety_reset`을 사용하며 두 서비스는
+같은 콜백과 안전 검사를 거친다. 물리 버튼 해제와 앱·STT의 `false`는 reset 조건일 뿐
+reset 명령이 아니다. 관리자 인증과 유지보수 호출자 접근 통제는 `[GAP]`이다.
 
 ## 10. 앱 운용 시나리오
 
@@ -441,26 +442,29 @@ reset 요청 권한은 관리자 앱에만 둔다. 물리 버튼 해제와 앱·
 
 ### 10.4 지도와 장소 관리
 
-상태: 현재 구현 / 목적지 데이터 동기화 필요
+상태: 코드 구현 / runtime 통합 미검증
 
 1. 앱이 지도 목록과 이미지를 조회한다.
 2. 지도 위에서 장소 위치와 방향을 선택한다.
 3. `/save_location`으로 JSON 요청을 보낸다.
-4. ROS 보조 노드가 `vica_ros2_ws/location/<map_id>/locations.json`에 저장한다.
+4. `vica_destination_manager`가
+   `~/vica_data/destinations/<map_id>/destinations.yaml`에 원자적으로 저장한다.
 5. 잘못된 장소는 `/delete_location_request`로 삭제한다.
 
-음성 파이프라인은 `vica-voice-llm/config/destinations.yaml`을 사용한다. 앱에서 저장한 `locations.json`이 음성 목적지 YAML로 자동 반영되지는 않는다.
+목적지 ID는 UUID v4다. 기존 `locations.json`은 이관하지 않고 빈 catalog에서 시작한다.
+저장·삭제 뒤 Mission Manager reload service를 호출하며, 음성 노드는 같은 YAML의 변경
+시각을 확인해 다음 발화 전에 public 목적지를 다시 읽는다.
 
 ### 10.5 원격 목적지 요청
 
-상태: 구현 목표
+상태: 코드 구현 / Nav2·실기 runtime 미검증
 
 로봇이 사용자를 안내 중이 아닐 때(IDLE) 로그인한 운영자가 앱에서 저장된 장소를 선택해
 원격으로 주행을 요청한다. 조이스틱·방향키 방식의 수동 teleop은 구현하지 않는다.
 
 ```text
 앱 장소 선택
-→ typed mission 요청
+→ `/vica/mission/request_destination` (`RequestDestination`)
 → Mission Manager gate (6.5절 10조건 동일 적용)
 → NavigateToPose
 → Nav2 → 안전 계층 → motor
@@ -469,7 +473,7 @@ reset 요청 권한은 관리자 앱에만 둔다. 물리 버튼 해제와 앱·
 원칙:
 
 1. 앱은 NavigateToPose를 직접 발행하지 않는다. goal 발행자는 Mission Manager 하나다.
-   현재 `vica_goto_goal.py`의 직접 발행은 좌표 시험 도구로 한정하고 운용 경로에서 제외한다.
+   `vica_goto_goal.py`도 같은 Mission service를 호출하는 테스트·유지보수 client다.
 2. 사용자 안내 세션이 활성이거나 Smart Handle 사용자 접촉이 감지되면(IN_USE) 원격 요청을 거부한다.
 3. 주행 중 새 goal 요청은 Mission Manager의 `busy_navigating` gate가 거부한다.
    이 거부 로직은 현재 `mission_logic.py`에 구현되어 있다("지금 이동 중입니다" 안내).
@@ -518,8 +522,9 @@ reset 요청 권한은 관리자 앱에만 둔다. 물리 버튼 해제와 앱·
 
 ### E. reset
 
-- 비관리자, 물리 입력 active, stale 입력, 비영 속도 명령에서는 reset 거부
-- 관리자 앱 확인 후 중앙 E-stop 래치와 Safety reset 모두 완료
+- 물리 입력 active, stale 입력, 비영 속도 명령에서는 reset 거부
+- 앱 또는 유지보수 요청 후 중앙 E-stop 래치와 Supervisor reset 모두 완료
+- 관리자 인증 미구현 `[GAP]`을 운영 승인으로 대체하지 않음
 - 이전 goal 자동 재개 없음
 
 ### F. 앱 로그인·상태·로그
@@ -542,16 +547,16 @@ reset 요청 권한은 관리자 앱에만 둔다. 물리 버튼 해제와 앱·
 
 ## 13. 구현 우선순위
 
-1. Nav2 `/cmd_vel`을 Safety 입력 `/cmd_vel_req`로 연결
+1. Nav2 `/cmd_vel_req`부터 Safety·motor까지 바퀴를 띄운 HIL 종단 검증
 2. motor의 `/cmd_vel_safe` 단일 입력을 build/runtime에서 검증
-3. `emergency_stop_node` 중앙 래치와 관리자 앱 단일 reset 구현
-4. 실제 운용 launch에서 물리 CAN F1·앱·음성 E-stop 종단 연결
+3. `vica_safety` 중앙 래치와 reset 오케스트레이션 package build/test
+4. 실제 운용 launch에서 물리 CAN F1·앱·음성·유지보수 reset 종단 검증
 5. `robot_localization`, `python3-can` 설치 후 localization 전체 build/test
 6. C5 `/wheel/odom`과 D455 `/imu/base_link`를 사용한 EKF·Cartographer 실기 검증
 7. voice 운영 launch에서 개발 stub 제거 또는 선택 argument화
 8. TTS가 `/vica/tts_request`를 구독하도록 우선순위 큐 구현
 9. Mission 상세 상태를 `/robot_status`에 통합
-10. `locations.json`과 `destinations.yaml`의 데이터 동기화 기준 확정
+10. 지도별 `destinations.yaml` 저장·reload·음성 검색의 runtime 통합 검증
 11. `TurnGuide`, `SmartHandleState`, `SafetyState` 계약 정의
 12. Turn Guide와 서보·LED driver 구현
 13. bench test → 바퀴를 띄운 HIL → 제한 구역 저속 주행 순서로 검증

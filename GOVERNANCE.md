@@ -114,12 +114,19 @@ E-stop의 소프트웨어 권한은 다음처럼 단일화한다.
 → motor adapter
 ```
 
-- E-stop 래치와 외부 reset 서비스의 소유자는 `emergency_stop_node` 하나다.
+- E-stop 중앙 래치와 내부 래치 해제 권한은 `emergency_stop_node`가 소유한다.
+- 공개 reset 절차(`/app_estop_reset`, 유지보수 `/safety_reset`)는
+  `app_emergency_node`가 소유한다. Nav2가 실행 중이면 fresh status의 활성 Goal만 전체
+  취소하고, 처음부터 미실행이면 Goal 검사를 생략한다. 이전 status가 stale이면 reset을
+  거부하며 최종 READY까지 오케스트레이션한다.
+- 주행 출력 재승인 권한은 `safety_supervisor_node`가 소유한다.
 - motor node에는 별도 E-stop 래치, `/estop_state`, `/estop_reset`을 두지 않는다.
 - 앱·STT에서 들어오는 `false`는 해당 입력의 해제만 뜻하며 중앙 래치를 해제하지 않는다.
 - LLM과 STT에는 reset 권한이 없다.
 - 모든 원인이 해제되고 정지 조건이 확인된 뒤, 로그인한 관리자가 앱 확인 팝업을 통해
-  단일 reset을 요청한다.
+  단일 reset을 요청하는 것이 목표다. 관리자 인증은 아직 `[GAP]`이다.
+- `/safety_reset`은 영구 유지보수 인터페이스로 남기되 같은 오케스트레이션과 안전 검사를
+  거치며, 현재 `Trigger` 계약에는 호출자 인증 정보가 없는 `[GAP]`이 있다.
 - 물리 E-stop 전원·토크 차단 회로는 이 소프트웨어 래치와 별도로 유지한다.
 
 ## 6. 앱과 LLM 저장소 분리 원칙

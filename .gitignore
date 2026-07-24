@@ -5,6 +5,8 @@
 /VICA_Supervisor/
 
 # Local/generated workspace data
+/build/
+/install/
 /log/
 /workspaces
 /meta_prompt.txt
