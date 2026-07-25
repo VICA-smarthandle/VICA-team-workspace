@@ -11,6 +11,8 @@
 /source_file/
 /.agents/
 /.codex/
+/install/
+/build/
 
 # Secrets and local environment
 .env
