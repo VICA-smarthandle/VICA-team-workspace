@@ -1,6 +1,6 @@
 # VICA 통합 아키텍처
 
-작성 기준일: 2026-07-22
+검토 기준일: 2026-07-26
 기준 작업공간: 이 문서가 포함된 작업공간 루트
 
 ## 1. 문서 목적과 판정 기준
@@ -22,8 +22,8 @@ VICA는 하나의 monorepo가 아니라 세 개의 Git 저장소와 공용 참�
 | 경로 | 현재 브랜치 | 역할 |
 | --- | --- | --- |
 | `vica_ros2_ws/` | `dev` | ROS2 제어, Nav2, SLAM, TF, 안전, 모터, Mission, 인터페이스 |
-| `vica-voice-llm/` | `main` | STT, TTS, 긴급어 감지, LLM 목적지 해석 |
-| `VICA_Supervisor/` | `main` | Flutter 운영 앱, rosbridge, 상태·지도·장소 관리 |
+| `vica-voice-llm/` | `dev` | STT, TTS, 긴급어 감지, LLM 목적지 해석 |
+| `VICA_Supervisor/` | `dev` | Flutter 운영 앱, rosbridge, 상태·지도·장소 관리 |
 | `GOVERNANCE.md` | 조정 저장소 | 팀·AI 협업, 변경 승인, 배포 기준 |
 | `guideline/` | 조정 저장소 | 통합 문서(시나리오·아키텍처·BT), 공식 URL 목록 |
 | `source_file/` | 로컬 전용(Git 제외) | 하드웨어·공식 문서 원본(PDF, drawio) |
@@ -37,7 +37,7 @@ LLM과 앱은 dependency·빌드·배포 주기가 다르므로 별도 저장소
 저장소를 하나로 합치지 않고 `GOVERNANCE.md`, guideline과 향후 배포 manifest에서
 공용 계약과 정확한 버전을 중앙 관리한다.
 
-`vica_ros2_ws/src`의 VICA ROS 패키지는 현재 11개다.
+`vica_ros2_ws/src`의 VICA ROS 패키지는 현재 12개다.
 
 | 패키지 | 역할 |
 | --- | --- |
@@ -50,6 +50,7 @@ LLM과 앱은 dependency·빌드·배포 주기가 다르므로 별도 저장소
 | `vica_localization` | wheel odometry와 IMU를 `robot_localization` EKF로 융합하고 표준 `/odom` 제공 |
 | `vica_mission_manager` | 목적지 gate, Mission 상태, Nav2 goal, 음성 E-stop bridge |
 | `vica_nav2` | 저장 지도 기반 Nav2 bringup과 parameter |
+| `vica_nvblox_bringup` | Isaac ROS Docker의 D455·nvblox launch와 VICA override |
 | `vica_sensor_adapters` | IMU frame 변환, VSLAM covariance adapter |
 | `vica_safety` | 물리·앱·음성 E-stop 중앙 래치, Safety Supervisor, reset 오케스트레이터 |
 
@@ -74,6 +75,7 @@ LLM과 앱은 dependency·빌드·배포 주기가 다르므로 별도 저장소
                          ▼
 ┌──────────────────────── Nav2 ────────────────────────┐
 │ map_server + AMCL + planner + controller + BT        │
+│ local costmap: /scan voxel + nvblox 3D slice         │
 │ 최종 속도 출력: /cmd_vel_req                          │
 └────────────────────────┬─────────────────────────────┘
                          ▼
@@ -138,10 +140,11 @@ float64 detected_at
 | 인터페이스 | 타입 | 현재 producer | 현재 consumer | 상태 |
 | --- | --- | --- | --- | --- |
 | `/vica/user_text` | `std_msgs/String` | STT | LLM node | 연결됨 |
-| `/vica/intent` | `VicaIntent` | LLM node | TTS, Mission Manager, 개발 stub | 운영 stub 중복 주의 |
-| `/vica/emergency` | `EmergencyEvent` | 긴급어 감시 | Mission Manager, E-stop bridge, 개발 stub | 연결됨 |
-| `/vica/robot_state` | `RobotState` | Mission Manager, 개발 stub | LLM node | 운영 stub 중복 주의 |
-| `/vica/tts_request` | `std_msgs/String` | Mission Manager | 없음 | 통합 gap |
+| `/vica/intent` | `VicaIntent` | LLM node | Mission Manager | 이동 요청 후보, 연결됨 |
+| `/vica/emergency` | `EmergencyEvent` | 긴급어 감시 | Mission Manager, E-stop bridge | LLM 우회 경로, 연결됨 |
+| `/vica/robot_state` | `RobotState` | Mission Manager | LLM node | 1 Hz 상태 입력, 연결됨 |
+| `/vica/tts_request` | `std_msgs/String` | STT, LLM, Mission Manager | TTS | 우선순위 큐 연결, 실제 음성 출력 `[미검증]` |
+| `/vica/tts_state` | `std_msgs/Bool` | TTS | 긴급어 감시 | 재생 중 자가 E-stop 오탐 억제 |
 | `/voice_emergency_stop` | `std_msgs/Bool` | emergency bridge | emergency_stop_node | 연결 가능 |
 | `/app_emergency_stop` | `std_msgs/Bool` | app_emergency_node | emergency_stop_node | 연결 가능 |
 | `/emergency_stop` | `std_msgs/Bool` | vica_safety/emergency_stop_node | Safety, Mission, app_emergency_node | 중앙 래치 코드·launch 구현, 실기 `[미검증]` |
@@ -207,21 +210,19 @@ hard-stop 키워드는 현재 6개다.
 멈춰, 정지, 스탑, 스톱, 안돼, 위험해
 ```
 
-`잠깐`, `천천히`, `느리게`는 감지되지만 hard-stop bridge에서 무시된다.
+`잠깐`, `천천히`, `느리게`는 E-stop 감지 목록에서 제외되어 일반 발화로 처리된다.
+감속 intent는 아직 `[TARGET]`이다.
 
-### 5.3 현재 운영 gap
+### 5.3 현재 실행 계약
 
-`vica_voice.launch.py`는 다음 노드를 함께 실행한다.
+`vica_voice.launch.py`는 LLM node, TTS node와 emergency monitor만 실행한다. 개발용
+RobotState·state-machine stub과 중복 `vica_interfaces` 사본은 제거됐다. push-to-talk
+STT는 대화형 입력이므로 별도 터미널에서 실행한다.
 
-- LLM node
-- TTS node
-- emergency monitor
-- `ros_robot_state_stub`
-- `ros_state_machine_stub`
-
-Mission Manager와 함께 운영할 때 두 stub은 중복 producer/consumer가 되므로 제거하거나 `use_stubs` launch argument로 선택 실행해야 한다.
-
-Mission Manager가 발행하는 `/vica/tts_request`를 TTS가 구독하지 않는다. TTS는 현재 `/vica/intent.reply`만 재생한다.
+TTS는 STT·LLM·Mission Manager가 발행하는 `/vica/tts_request`를 우선순위 큐로 처리하고
+`/vica/tts_state`를 발행한다. emergency monitor는 재생 중 감시를 잠시 억제하고, 제한
+시간이 지나면 자동 재개한다. 코드·단위 테스트 계약은 연결됐고 실제 마이크·스피커
+재생은 `[미검증]`이다.
 
 ## 6. Mission Manager 아키텍처
 
@@ -288,11 +289,17 @@ E-stop reset 뒤 이전 goal은 자동 재개하지 않는다.
 | DWB 최대 회전 속도 | 0.4 rad/s |
 | Goal 접근 속도 | 경로 잔여거리 3.0 m부터 직선·회전 최대속도의 70% |
 | Goal tolerance | x/y 0.25 m, yaw 0.25 rad |
-| Local costmap | `odom`, voxel + inflation, `/scan` |
+| Local costmap | `odom`, voxel(`/scan`) + nvblox slice + inflation |
 | Global costmap | `map`, static + obstacle + inflation, `/scan` |
 | Footprint | 전방 0.15 m, 후방 -0.60 m, 좌우 ±0.1875 m |
 
-`nvblox_layer` 설정 블록은 남아 있지만 local costmap `plugins` 목록에는 포함되지 않아 현재 활성 plugin이 아니다.
+`nvblox_layer`는 local costmap `plugins`에 포함되며
+`nvblox::nav2::NvbloxCostmapLayer`를 사용한다. slice 입력은
+`/nvblox_node/static_map_slice`, frame은 local costmap과 같은 `odom`이다.
+`vica_nvblox_bringup`이 Isaac ROS Docker의 D455·nvblox launch와 높이 override를
+소유한다. Host에는 `nvblox_nav2`·`nvblox_msgs`가 로드 가능한 상태여야 하며,
+dependency contract가 XML·library·message 존재를 검사한다. 실제 D455→slice→local
+costmap→Goal 종단은 `[미검증]`이다.
 
 ### 7.3 Behavior Tree
 
@@ -588,9 +595,12 @@ STT /voice_emergency_stop ──┘   ├─ source 상태·freshness 관리
 
 ### 10.2 현재 로그인 상태
 
-로그인 화면과 기존 사용자 로그인은 확정된 요구사항이지만, 현재 Flutter source에는 로그인 screen, auth provider, 로그인 route가 없으므로 구현 목표로 분류한다. 설정 화면에는 읽기 전용 `admin` 계정 정보만 있다.
+Flutter source에는 `AuthGate`, `LoginScreen`, `AuthProvider`와 로컬 관리자 계정 설정이
+있다. 앱은 저장된 로그인 상태에 따라 로그인 화면과 `SupervisorShell`을 분기하고
+로그아웃 시 상태를 삭제한다. 신규 회원가입과 복잡한 역할 관리는 범위 밖이다.
 
-후속 통합 시 로그인 기능을 삭제하지 말고 실제 구현 source를 확인해 앱 시작 route 앞에 연결한다. 신규 회원가입과 복잡한 권한 관리는 범위 밖이다.
+이 로그인은 앱 진입 제어이며 ROS service에 호출자 신원을 전달하지 않는다. 따라서
+`/app_estop_reset`과 `/safety_reset`의 관리자 인증·접근 통제는 여전히 `[GAP]`이다.
 
 ### 10.3 상태 bridge
 
@@ -728,11 +738,11 @@ stamp
 | P0 | localization 런타임 의존성 미설치 | `robot_localization`, `python3-can` 설치 후 깨끗한 환경에서 전체 build/test |
 | P0 | wheel+IMU 실기 융합 미검증 | C5, D455 adapter, `/odom`과 TF 단일 authority를 HIL에서 검증 |
 | P0 | `vica_safety`의 `can_f1` launch가 실기 미검증 | `can1`·`0x701`·F1 freshness를 읽기 우선으로 검증 |
-| P1 | Mission과 앱 시험 도구의 Goal 권한 중복 | 코드 연결 완료, runtime 검증 필요 |
-| P1 | voice launch의 stub 중복 | 운영 launch에서 제외 |
-| P1 | Mission TTS 미연결 | `/vica/tts_request` subscriber와 priority queue |
+| P1 | Mission·앱·CLI 경로의 runtime 미검증 | 공개 Mission service와 `/vica_goal_event` 종단 검증 |
+| P1 | nvblox local costmap 종단 미검증 | Host plugin·Docker slice·Nav2 Goal을 함께 검증 |
+| P1 | 통합 음성 출력 미검증 | `/vica/tts_request` 우선순위와 실제 마이크·스피커 검증 |
 | P1 | 앱 Mission 상세 상태 미연결 | 공통 mission status 계약 정의 |
-| P1 | 목적지 YAML/JSON 이중화 | 지도별 YAML 정본으로 코드 통합, runtime 검증 필요 |
+| P1 | 목적지 통합 runtime 미검증 | 지도별 YAML 저장·reload·음성 검색을 함께 검증 |
 | P2 | Smart Handle 안내 미구현 | 메시지 → mock → bench → HIL 순서 구현 |
 
 ## 14. 권장 통합 순서
@@ -743,11 +753,12 @@ stamp
 4. motor가 `/cmd_vel_safe`만 받는 현재 계약을 build/runtime에서 검증한다.
 5. `vica_safety`의 중앙 래치와 reset 오케스트레이션을 package build/test한다.
 6. 물리·음성·앱 E-stop과 유지보수 `/safety_reset`을 바퀴를 띄운 상태에서 종단 검증한다.
-7. voice 운영 stub과 TTS 계약을 정리한다.
-8. 앱 Mission 상태와 목적지 데이터 계약을 통합한다.
-9. Turn Guide 순수 로직과 mock driver를 구현한다.
-10. 서보·LED MCU bench test를 수행한다.
-11. 전체 HIL 뒤 제한 구역 저속 주행을 수행한다.
+7. Host nvblox plugin과 Docker slice를 local costmap에 연결해 Goal을 검증한다.
+8. 통합 음성 launch와 `/vica/tts_request` 실제 재생을 검증한다.
+9. 앱 Mission 상태와 목적지 데이터 계약을 runtime에서 검증한다.
+10. Turn Guide 순수 로직과 mock driver를 구현한다.
+11. 서보·LED MCU bench test를 수행한다.
+12. 전체 HIL 뒤 제한 구역 저속 주행을 수행한다.
 
 ## 15. 공식 참고자료
 

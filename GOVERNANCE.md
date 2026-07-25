@@ -85,8 +85,9 @@ reset, stash 또는 commit하지 않는다.
 공용 ROS 메시지의 정본은 `vica_ros2_ws/src/vica_interfaces/`다.
 
 - LLM의 Pydantic 모델과 Flutter/rosbridge JSON은 정본 계약을 소비한다.
-- `vica-voice-llm/ros2_ws/src/vica_interfaces/`는 현재 중복 사본이며 `[GAP]`으로 관리한다.
-- 중복 사본을 독립 수정하지 않는다. 제거 또는 버전 고정 방식은 별도 승인 후 결정한다.
+- 음성 저장소의 중복 `ros2_ws/src/vica_interfaces/`는 제거됐다. 음성 노드는
+  `vica_ros2_ws`에서 빌드·source한 `vica_interfaces`를 import한다.
+- 공용 메시지를 음성이나 앱 저장소에 다시 복사하지 않는다.
 - producer와 consumer가 다른 저장소에 있으면 한쪽만 변경하지 않는다.
 - 계약 변경 PR에는 영향 저장소, 호환성, 전환 순서와 rollback 방법을 적는다.
 

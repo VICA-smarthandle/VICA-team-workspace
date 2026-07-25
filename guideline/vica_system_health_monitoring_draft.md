@@ -1,7 +1,7 @@
 # VICA 통합 상태 감시·즉시 피드백·자동 복구 아키텍처 초안
 
 문서 상태: 팀 검토용 초안
-작성 기준일: 2026-07-24
+검토 기준일: 2026-07-26
 기준 작업공간: 이 문서가 포함된 작업공간 루트
 대상: VICA ROS 2 전체 시스템, 모터 안전제어, Nav2, 사용자 안내, 음성, 앱
 범위: 설계 및 구현 계획 제안
@@ -236,6 +236,8 @@ VICA-smarthandle/                         # 조정 작업공간 [CURRENT]
 │       ├── vica_safety/                   # E-stop + Safety Supervisor [CURRENT]
 │       ├── vica_localization/             # EKF /odom [CURRENT]
 │       ├── vica_nav2/                     # Nav2 [CURRENT]
+│       ├── vica_nvblox_bringup/            # Docker D455·nvblox launch [CURRENT]
+│       ├── vica_destination_manager/       # 지도별 목적지 YAML [CURRENT]
 │       ├── vica_mission_manager/          # Goal 권한 [CURRENT]
 │       ├── vica_interfaces/
 │       │   └── msg/
@@ -445,7 +447,7 @@ simulation time 변경에 영향을 덜 받는다.
 
 | 감지 항목 | 설명 |
 |---|---|
-| 현재 safety state | SAFE, STOP, ESTOP, FAULT 구분 |
+| 현재 safety state | `IDLE`, `RUNNING`, `ESTOP_ACTIVE`, `ESTOP_RELEASED_WAIT_RESET`, `READY_TO_GO`, `FAULT` 구분 |
 | stop latch | 원인이 사라져도 정지를 유지하는지 |
 | reset 필요 여부 | 사용자 확인이 필요한지 |
 | requested cmd age | upstream 명령 단절 |

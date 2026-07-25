@@ -1,6 +1,6 @@
 # VICA 통합 동작 시나리오
 
-작성 기준일: 2026-07-22
+검토 기준일: 2026-07-26
 기준 작업공간: 이 문서가 포함된 작업공간 루트
 기준 저장소: `vica_ros2_ws`, `vica-voice-llm`, `VICA_Supervisor`
 
@@ -109,7 +109,10 @@ Nav2 자율주행 모드
 
 이 기능은 후속 구현에서 임의로 제거하거나 다른 기능으로 대체하지 않는다.
 
-> 현재 확인한 `VICA_Supervisor` 소스는 앱 시작 시 `SupervisorShell`로 바로 진입하며 별도의 로그인 화면·인증 route는 발견되지 않았다. 로그인은 확정된 요구사항이지만 현재 소스에 구현이 없으므로 “구현 목표”로 분류한다. 구현 후에는 임의로 제거하지 않는다. 최신 로그인 소스가 별도 위치에 있다면 통합한다.
+현재 `VICA_Supervisor`는 `AuthGate`에서 로컬 관리자 로그인 여부를 확인하고,
+`LoginScreen` 또는 `SupervisorShell`로 분기한다. 로그인 상태 저장과 로그아웃도
+구현되어 있다. 다만 이 앱 로그인은 ROS service 호출자 신원을 전달하지 않으므로
+`/app_estop_reset`·`/safety_reset`의 호출자 인증 `[GAP]`을 해소하지 않는다.
 
 ## 4. 전체 서비스 흐름
 
@@ -156,10 +159,10 @@ LLM은 목적지 후보와 대화 응답만 제안한다. LLM, STT, TTS 및 앱�
 | localization 의존성 | `vica_localization` 연결과 로컬 EKF 기동은 검증했으나 시스템에 `robot_localization`, `python3-can` 설치가 필요함 |
 | wheel·IMU 실기 융합 | `/wheel/odom + /imu/base_link → EKF → /odom` 계약은 연결됐으나 C5와 D455 동시 실기 검증은 미완료 |
 | Cartographer odometry | `odom_topic=/odom` 전달과 remap은 적용됐으나 Cartographer를 포함한 실기 runtime 검증이 필요함 |
+| nvblox 장애물 계층 | local costmap plugin·Docker bringup·dependency 검사는 구현, D455→slice→Nav2 Goal 종단 `[미검증]` |
 | E-stop 중앙 래치 | `vica_safety` 코드·launch·단위 테스트 구현, 실제 F1·CAN 종단 `[미검증]` |
 | reset 통합 | 앱·유지보수 공개 서비스와 Nav2 취소·2단계 내부 reset 구현, runtime `[미검증]` |
-| TTS 통합 | Mission Manager는 `/vica/tts_request`를 발행하지만 TTS는 `/vica/intent`만 구독함 |
-| 운영 voice launch | 개발용 RobotState·state-machine stub 두 개가 아직 포함됨 |
+| 음성 출력 | `/vica/tts_request` 우선순위 큐와 `/vica/tts_state` 연결은 구현, 실제 마이크·스피커 `[미검증]` |
 
 ### 5.3 Smart Handle 구현 뒤 추가할 조건
 
@@ -259,9 +262,9 @@ Mission Manager는 다음 조건을 모두 검사한다.
 2. Nav2는 저장 지도, AMCL, costmap, planner와 controller를 사용한다.
 3. 현재 설정은 사용자 정의 BT XML이 아니라 Nav2 Humble 기본 NavigateToPose BT를 사용한다.
 4. global planner는 Navfn, local controller는 DWB다.
-5. local/global costmap은 `/scan`을 장애물 입력으로 사용한다.
-6. Nav2의 속도 출력은 현재 `/cmd_vel` 경로다.
-7. 목표 안전 구조에서는 최종 Nav2 명령을 `/cmd_vel_req`로 보내고, Safety Supervisor가 승인한 `/cmd_vel_safe`만 motor가 받아야 한다.
+5. global costmap은 `/scan`, local costmap은 `/scan`과 nvblox slice를 장애물 입력으로 사용한다.
+6. controller 내부 출력 `/cmd_vel_nav`는 velocity smoother를 거쳐 `/cmd_vel_req`로 나간다.
+7. Safety Supervisor가 승인한 `/cmd_vel_safe`만 motor가 받는다. 실제 종단은 `[미검증]`이다.
 
 ## 7. Smart Handle 회전 사전 안내
 
@@ -364,7 +367,8 @@ DWB `decel_lim`은 장애물 회피·controller 정지 등 모든 상황의 실�
 `[미검증]`이다. E-stop은 velocity smoother의 완만한 감속을 기다리지 않고 Safety
 Supervisor가 `/cmd_vel_safe=0`으로 차단한다.
 
-Mission 도착 문구는 현재 `/vica/tts_request`로 발행되지만 TTS subscriber 연결이 없어 실제 재생은 보장되지 않는다.
+Mission 도착 문구는 `/vica/tts_request` 우선순위 큐로 TTS에 연결된다. 실제 장치의
+재생 음량·지연·긴급어 감시 재개 동작은 `[미검증]`이다.
 
 ## 9. 긴급정지 시나리오
 
@@ -408,7 +412,8 @@ E-stop 래치는 `emergency_stop_node` 하나만 소유한다. motor node에는 
 5. `emergency_stop_node`가 첫 `true`를 중앙 래치하고 `/emergency_stop=true`를 유지한다.
 6. Safety가 `/cmd_vel_safe=0`을 유지한다.
 
-`잠깐`, `천천히`, `느리게`는 음성 감지 목록에 있지만 현재 hard-stop bridge가 무시한다. 감속·일시정지 구현 전에는 보장된 정지 명령으로 안내하지 않는다.
+`잠깐`, `천천히`, `느리게`는 E-stop 감지 목록에서 제외되어 일반 발화로 처리된다.
+감속·일시정지 intent는 아직 구현되지 않았으므로 보장된 제어 명령으로 안내하지 않는다.
 
 음성 경로의 `false`는 입력 펄스 종료일 뿐 중앙 래치 해제가 아니다. STT와 LLM에는
 reset 권한을 부여하지 않는다.
@@ -446,7 +451,8 @@ reset 권한을 부여하지 않는다.
 
 목표 구조:
 
-1. 앱 또는 유지보수 터미널이 공개 reset을 요청한다. 로그인 관리자 UI는 `[TARGET]`이다.
+1. 로그인한 관리자가 앱에서 공개 reset을 요청하거나 유지보수 터미널이
+   `/safety_reset`을 호출한다. ROS service 호출자 인증은 `[GAP]`이다.
 2. 앱 구현 시 위험 원인 확인과 해제 여부를 팝업으로 재확인한다.
 3. 물리 버튼, 앱 입력과 음성 입력이 모두 비활성인지 확인한다.
 4. 물리 입력 상태가 fresh한지 확인한다.
@@ -466,7 +472,7 @@ reset 명령이 아니다. 관리자 인증과 유지보수 호출자 접근 통
 
 ### 10.1 로그인
 
-상태: 구현 목표 (요구사항 확정 · 구현 후 임의 제거 금지)
+상태: 로컬 관리자 로그인 구현 / ROS service 호출자 인증 `[GAP]`
 
 1. 앱 실행 시 로그인 화면을 표시한다.
 2. 기존 사용자 정보로 로그인한다.
@@ -486,12 +492,11 @@ reset 명령이 아니다. 관리자 인증과 유지보수 호출자 접근 통
 | 운행 | `/robot_status.status == moving` |
 | 대기·멈춤 | `/robot_status.status == waiting` |
 | 오류 | `/robot_status.status == error`와 `error_reason` |
-| 비상정지(현재 앱 입력) | `/app_estop_state.active == true` |
-| 비상정지(목표 실제 상태) | 중앙 래치된 `/emergency_stop` 또는 동등한 통합 상태 |
+| 비상정지 | 중앙 `/emergency_stop`을 반영한 `/app_estop_state.active == true` |
 
 현재 UI 라벨은 `moving=운행`, `waiting=대기`, `error=오류`다. 사용자 요구 표현인 “주행 중/멈춤”은 이 상태와 매핑한다.
-현재 `/app_estop_state`는 앱 자체 입력 상태라 물리·음성으로 래치된 전체 E-stop을 보장하지
-않는다. 배포 전 앱 표시를 중앙 상태와 연결해야 한다.
+`/app_estop_state`는 app 입력만이 아니라 중앙 E-stop과 Safety 상태를 통합한다.
+Flutter 표시를 포함한 실제 rosbridge runtime은 `[미검증]`이다.
 
 ### 10.3 로그
 
@@ -621,8 +626,8 @@ reset 명령이 아니다. 관리자 인증과 유지보수 호출자 접근 통
 4. 실제 운용 launch에서 물리 CAN F1·앱·음성·유지보수 reset 종단 검증
 5. `robot_localization`, `python3-can` 설치 후 localization 전체 build/test
 6. C5 `/wheel/odom`과 D455 `/imu/base_link`를 사용한 EKF·Cartographer 실기 검증
-7. voice 운영 launch에서 개발 stub 제거 또는 선택 argument화
-8. TTS가 `/vica/tts_request`를 구독하도록 우선순위 큐 구현
+7. Host nvblox plugin·Docker slice·Nav2 local costmap의 실제 Goal 종단 검증
+8. `/vica/tts_request` 우선순위와 `/vica/tts_state`를 실제 마이크·스피커로 검증
 9. Mission 상세 상태를 `/robot_status`에 통합
 10. 지도별 `destinations.yaml` 저장·reload·음성 검색의 runtime 통합 검증
 11. `TurnGuide`, `SmartHandleState`, `SafetyState` 계약 정의
