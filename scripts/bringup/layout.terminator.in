@@ -1,0 +1,81 @@
+# VICA 주행 bringup 용 Terminator 레이아웃 (템플릿).
+# start.sh 가 @DIR@ 를 실제 경로로 바꿔 임시 설정으로 띄운다. 직접 실행하지 말 것.
+#
+# 배치(창 하나를 2행 3열로 분할):
+#   [1 Nav2 ] [2 Safety] [3 Motor]
+#   [4 Mission] [5 Voice ] [6 STT ]
+#
+# 트리 구조는 아래 '들여쓰기'가 아니라 각 항목의 parent= 로 정의된다(Terminator 규칙).
+
+[profiles]
+  [[default]]
+    scrollback_infinite = True
+    use_system_font = True
+
+[layouts]
+  [[vica_bringup]]
+    [[[root]]]
+      type = Window
+      parent = ""
+      title = VICA bringup
+    [[[vsplit]]]
+      type = VPaned
+      parent = root
+      order = 0
+      ratio = 0.5
+    [[[toprow]]]
+      type = HPaned
+      parent = vsplit
+      order = 0
+      ratio = 0.34
+    [[[toprow_r]]]
+      type = HPaned
+      parent = toprow
+      order = 1
+      ratio = 0.5
+    [[[botrow]]]
+      type = HPaned
+      parent = vsplit
+      order = 1
+      ratio = 0.34
+    [[[botrow_r]]]
+      type = HPaned
+      parent = botrow
+      order = 1
+      ratio = 0.5
+    [[[t_nav2]]]
+      type = Terminal
+      parent = toprow
+      order = 0
+      title = 1_Nav2
+      command = bash -c "source @DIR@/vica_env.sh; run_nav2; exec bash"
+    [[[t_safety]]]
+      type = Terminal
+      parent = toprow_r
+      order = 0
+      title = 2_Safety
+      command = bash -c "source @DIR@/vica_env.sh; run_safety; exec bash"
+    [[[t_motor]]]
+      type = Terminal
+      parent = toprow_r
+      order = 1
+      title = 3_Motor
+      command = bash -c "source @DIR@/vica_env.sh; run_motor; exec bash"
+    [[[t_mission]]]
+      type = Terminal
+      parent = botrow
+      order = 0
+      title = 4_Mission
+      command = bash -c "source @DIR@/vica_env.sh; run_mission; exec bash"
+    [[[t_voice]]]
+      type = Terminal
+      parent = botrow_r
+      order = 0
+      title = 5_Voice
+      command = bash -c "source @DIR@/vica_env.sh; run_voice; exec bash"
+    [[[t_stt]]]
+      type = Terminal
+      parent = botrow_r
+      order = 1
+      title = 6_STT
+      command = bash -c "source @DIR@/vica_env.sh; run_stt; exec bash"
