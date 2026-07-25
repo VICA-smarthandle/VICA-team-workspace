@@ -148,6 +148,7 @@ float64 detected_at
 | `/estop_state` | `std_msgs/Bool` | vica_safety/emergency_stop_node | 호환·진단 consumer | 중앙 래치 호환 출력, motor 소유 아님 |
 | `/safety_state` | `std_msgs/String` | Safety Supervisor | app_emergency_node | 코드상 연결, runtime `[미검증]` |
 | `/cmd_vel` | `Twist` | test tool | 안전 운영 consumer 없음 | 운영 Nav2 출력으로 사용하지 않음 |
+| `/speed_limit` | `nav2_msgs/msg/SpeedLimit` | Mission Manager | Nav2 controller server | Goal 잔여거리 3 m에서 70% 제한, 실제 주행 `[미검증]` |
 | `/cmd_vel_req` | `Twist` | Nav2 velocity smoother | Safety Supervisor | launch remap 구현, 실기 종단 `[미검증]` |
 | `/cmd_vel_safe` | `Twist` | Safety Supervisor | motor | 코드상 연결, launch/runtime 검증 필요 |
 | `/wheel/odom` | `nav_msgs/Odometry` | encoder_feedback | `robot_localization` EKF | 코드·설정·launch 연결 및 로컬 기동 검증 완료, 실기 검증 필요 |
@@ -285,6 +286,7 @@ E-stop reset 뒤 이전 goal은 자동 재개하지 않는다.
 | Local controller | `dwb_core::DWBLocalPlanner` |
 | 최대 직선 속도 | 0.26 m/s |
 | DWB 최대 회전 속도 | 0.4 rad/s |
+| Goal 접근 속도 | 경로 잔여거리 3.0 m부터 직선·회전 최대속도의 70% |
 | Goal tolerance | x/y 0.25 m, yaw 0.25 rad |
 | Local costmap | `odom`, voxel + inflation, `/scan` |
 | Global costmap | `map`, static + obstacle + inflation, `/scan` |
@@ -408,6 +410,10 @@ Cartographer/Nav2   App status
 ### 9.1 현재 구조
 
 ```text
+Mission Manager
+        ├─ NavigateToPose Goal
+        └─ /speed_limit (잔여거리 3 m부터 70%)
+                 ↓
 Nav2 controller
         └─ /cmd_vel_nav
              └─ velocity_smoother
@@ -426,6 +432,12 @@ Safety Supervisor
 도달한다. 코드·정적 계약은 연결됐지만 Nav2 Goal부터 CAN motor까지의 실기 종단 동작은
 아직 `[미검증]`이다. 시험 도구 `vica_goto_goal.py`의 별도 yaw 정렬과 `/cmd_vel`
 발행은 제거했으며, 목적지 pose의 최종 방향 정렬은 Nav2가 담당한다.
+
+Mission Manager는 Nav2 feedback의 양수 `distance_remaining`이 3.0 m 이하가 된 첫
+시점에 `/speed_limit`으로 최대 직선·회전속도를 70%로 제한한다. 현재 DWB 설정 기준
+0.182 m/s와 0.28 rad/s이며, 재계획으로 잔여거리가 늘어나도 해당 Goal이 끝날 때까지
+유지한다. 성공·실패·취소·E-stop과 새 Goal 시작 시 `speed_limit=0.0`으로 제한을
+해제한다. 이 경로의 실제 Goal·Safety·motor 종단 동작은 `[미검증]`이다.
 
 motor node는 MDROBOT F1 I/O 모니터의 knob(스마트핸들 가변저항) 값으로 주행 속도를
 보정한다(보행 속도 추종, 현재 구현됨). F1이 `knob_timeout_sec` 안에 수신되지 않으면

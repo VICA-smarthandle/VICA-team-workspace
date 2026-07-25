@@ -335,15 +335,34 @@ yaw 변화량으로 회전을 감지한 시점부터 LED·서보를 구동한다
 
 ## 8. 목적지 도착
 
-상태: Mission 상태 로직 현재 구현 / TTS 연결 통합 필요
+상태: Nav2 감속·정지 판정과 Mission 상태 로직 코드 구현 / 실제
+Goal·Safety·motor 종단 및 TTS 연결 검증 필요
 
-1. Nav2가 성공 결과를 반환한다.
-2. Mission 상태가 `arrived`가 된다.
-3. 활성 회전 cue를 취소한다.
-4. 좌·우 LED를 끈다.
-5. 서보를 중립으로 복귀시킨다.
-6. 목적지별 `arrival_message` 또는 기본 도착 문구를 발행한다.
-7. 짧은 dwell 뒤 `idle`로 돌아간다.
+1. Nav2 feedback의 경로 잔여거리가 3.0 m 이하가 되면 Mission Manager가
+   `/speed_limit`에 70% 제한을 한 번 발행한다.
+2. DWB 최대 직선속도는 0.26 m/s에서 0.182 m/s로, 최대 회전속도는
+   0.4 rad/s에서 0.28 rad/s로 제한된다.
+3. 목표점의 0.25 m 허용 범위에 들어오면 DWB `RotateToGoal`이 선속도를 더 낮춘다.
+4. velocity smoother가 정상 주행 감속 한계를 적용해 급격한 정지 명령을 완화한다.
+5. `StoppedGoalChecker`가 위치·방향과 함께 선속도 0.03 m/s 이하, 각속도
+   0.05 rad/s 이하를 확인한 뒤 Nav2 성공 결과를 반환한다.
+6. Mission 상태가 `arrived`가 되고 `/speed_limit` 제한을 해제한다.
+7. 활성 회전 cue를 취소한다.
+8. 좌·우 LED를 끈다.
+9. 서보를 중립으로 복귀시킨다.
+10. 목적지별 `arrival_message` 또는 기본 도착 문구를 발행한다.
+11. 짧은 dwell 뒤 `idle`로 돌아간다.
+
+3 m 접근 제한은 Goal별로 래치해 재계획으로 잔여거리가 다시 늘어도 유지한다.
+성공·실패·취소·E-stop과 새 Goal 시작 시 `speed_limit=0.0`으로 해제한다. 실제
+`/speed_limit → DWB → /cmd_vel_req → /cmd_vel_safe → motor` 종단은 `[미검증]`이다.
+
+DWB `decel_lim`은 장애물 회피·controller 정지 등 모든 상황의 실제 제동력이므로 항상
+최대치를 유지하며, 위 4번의 완만한 감속은 velocity smoother의 `max_decel`에서만
+적용한다. 이 값은 목적지 도착뿐 아니라 취소·controller 무응답 시에도 공통 적용되는
+전역 파라미터라 "정상 도착 전용"은 아니다 — 이 트레이드오프가 실기에서 허용 범위인지는
+`[미검증]`이다. E-stop은 velocity smoother의 완만한 감속을 기다리지 않고 Safety
+Supervisor가 `/cmd_vel_safe=0`으로 차단한다.
 
 Mission 도착 문구는 현재 `/vica/tts_request`로 발행되지만 TTS subscriber 연결이 없어 실제 재생은 보장되지 않는다.
 
