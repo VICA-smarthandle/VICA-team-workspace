@@ -80,6 +80,37 @@ alias(`humble`, `can_set`, `vica_rs` 등)는 편의 수단일 뿐이므로 이 �
 launch 인자에 경로를 넘길 때는 `$HOME`을 쓴다. `map:=~/경로` 형태는 셸이 틸데를
 확장하지 않아 리터럴 `~`가 그대로 전달되고 지도 로딩이 실패한다.
 
+### 터미널 자동 배치 (Terminator)
+
+터미널을 하나씩 열고 source하는 대신, 15칸을 한 번에 배치할 수 있다.
+
+```bash
+python3 ~/VICA-smarthandle/scripts/vica_terminator_layout.py   # 레이아웃 생성(최초 1회)
+terminator -l vica                                             # 실행
+```
+
+생성기는 터미널별 rc 파일(`~/.config/vica-terminator/`)과 Terminator 레이아웃을 만든다.
+기존 `~/.config/terminator/config`는 타임스탬프를 붙여 백업한다.
+
+모든 칸이 `~/.bashrc` → ROS 2 → `vica_ros2_ws` source와 통신 환경변수 설정까지 마친
+상태로 열린다. 음성 두 칸만 `vica-voice-llm`으로 이동한다.
+
+| 열 | 터미널 |
+| --- | --- |
+| 1열 센서·안전 | display · lidar · safety · imu **(자동 실행)** / motor |
+| 2열 Docker·주행 | d455 · nvblox · nav2 · mission · app |
+| 3열 음성·조작 | llm+tts · stt · goto · reset · teleop |
+
+- **자동 실행**은 바퀴를 움직이지 않는 4칸(display·lidar·safety·imu)뿐이다.
+- 나머지 11칸은 명령을 `history`에 넣어두고 대기한다. **위 화살표 한 번 + Enter**로
+  실행하며, 각 칸 상단에 단계 번호와 주의사항이 표시된다.
+- 순서 의존성이 있는 단계(Docker 카메라 → nvblox → Nav2)와 바퀴가 도는 단계는 자동으로
+  두지 않는다. §5의 순서를 사람이 통제한다.
+- `teleop` 칸은 `[TEST ONLY]`다. `/cmd_vel`을 `/cmd_vel_req`로 remap해 Safety를 거치며,
+  Nav2 주행 중에는 명령이 충돌하므로 쓰지 않는다.
+
+배치·자동 여부를 바꾸려면 스크립트의 `COLUMNS`만 고치고 다시 실행한다.
+
 ## 4. 음성·LLM 최초 1회 준비
 
 이 절은 장비를 새로 세팅하거나 `.venv`를 다시 만들 때만 수행한다. 배경 설명은
