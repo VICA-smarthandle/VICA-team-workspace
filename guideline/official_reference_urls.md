@@ -1,6 +1,6 @@
 # VICA 개발 공식 참고자료 URL
 
-최종 확인일: 2026-07-22
+최종 확인일: 2026-07-26
 
 VICA 개발 중 사용하는 Nav2, ROS 2, NVIDIA Jetson 및 Isaac ROS 공식 문서를 기능별로 정리한 목록이다.
 
@@ -38,6 +38,13 @@ VICA 개발 중 사용하는 Nav2, ROS 2, NVIDIA Jetson 및 Isaac ROS 공식 문
 | QoS 설정 | 센서 데이터와 노드 간 QoS 호환성 확인 | <https://docs.ros.org/en/humble/Concepts/Intermediate/About-Quality-of-Service-Settings.html> |
 | 사용자 정의 msg/srv | `vica_interfaces` 메시지 정의와 빌드 | <https://docs.ros.org/en/humble/Tutorials/Beginner-Client-Libraries/Custom-ROS2-Interfaces.html> |
 | ROS 2 Action | Nav2 goal처럼 피드백과 취소가 필요한 작업 이해 | <https://docs.ros.org/en/humble/Tutorials/Beginner-CLI-Tools/Understanding-ROS2-Actions/Understanding-ROS2-Actions.html> |
+
+### 시간과 watchdog
+
+| 문서 | 용도 | URL |
+| --- | --- | --- |
+| ROS 2 Clock and Time 설계 | `SystemTime`, `ROSTime`, `SteadyTime` 구분과 하드웨어 timeout 적용 기준 | <https://design.ros2.org/articles/clock_and_time.html> |
+| Python `time.monotonic()` | 시스템 시각 변경의 영향을 받지 않는 경과시간·timeout 계산 | <https://docs.python.org/3/library/time.html#time.monotonic> |
 
 ### TF, URDF, launch와 데이터 기록
 
