@@ -414,8 +414,14 @@ ros2 launch launch/vica_voice.launch.py map_id:=vica_map_0630
 다시 읽는다. 목적지 추가·삭제는 앱(`vica_destination_manager`)이 담당하고 음성
 저장소는 목적지를 수정하지 않는다.
 
+> **시작 로그를 반드시 확인한다.** `목적지 catalog가 없어 빈 목록을 사용합니다`
+> WARN이 보이면 경로가 틀린 것이다. 이 상태에서도 노드는 정상적으로 뜨고 LLM이 대답까지
+> 하지만, `matched_destination_id`가 비어 Mission gate에서 전부 차단되고 존재하지 않는
+> 장소를 지어낸다. `map_id` 절단(`vica_map_06`)이 실제로 이 증상을 만든 적이 있다.
+
 `ros_emergency_node`는 로봇이 말하는 동안 자가 오탐을 막기 위해 감시를 잠시 멈추고,
-TTS 종료 신호가 없어도 제한 시간 뒤 자동 재개한다.
+TTS 종료 신호가 없어도 제한 시간 뒤 자동 재개한다. 이 억제 구간이 긴급어 미검출로
+이어질 수 있다 — `vica-voice-llm/docs/voice-improvement-backlog.md` 5번 참고.
 
 ### ⑬ STT push-to-talk (Host)
 
@@ -586,6 +592,7 @@ motor를 Safety보다 먼저 내려야 승인되지 않은 명령이 남지 않�
 | `onnxruntime has no attribute __version__` | CPU·GPU 패키지가 같은 디렉터리에서 충돌 | §4.4의 `--force-reinstall` |
 | LLM 응답이 없거나 인증 오류 | `.env`의 `OLLAMA_API_KEY`·`OLLAMA_HOST` 누락 | §4.3 확인, 오프라인이면 로컬 Ollama로 전환 |
 | STT가 매우 느림 | CPU 폴백 | `.env`의 `VICA_STT_DEVICE=cuda`, `VICA_STT_COMPUTE=float16` 확인 |
+| 모든 발화가 `matched=None`, 없는 장소를 지어냄 | `map_id` 오타·절단으로 catalog를 못 읽음 | ⑫ 시작 로그의 catalog WARN 확인. `vica_map_0630`을 끝까지 입력 |
 | 목적지를 못 찾음 | ⑩과 ⑫의 `map_id` 불일치, 또는 목적지가 `public`이 아님 | 두 launch의 `map_id`를 맞추고 앱에서 권한 확인 |
 | `/vica/intent`는 오는데 주행하지 않음 | gate 실패 | Mission Manager 로그의 실패 사유(§6 표) 확인 |
 | 로봇 음성에 긴급어 감시가 반응 | 자가 오탐 | `/vica/tts_state` 발행 확인, `emergency_monitor.py`의 `max_mute_sec` 조정 |
