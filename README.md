@@ -153,6 +153,7 @@ VICA-smarthandle/
 ├── workspace.repos
 ├── guideline/
 ├── devlog/
+├── docs/
 ├── source_file/
 ├── vica_ros2_ws/
 ├── vica-voice-llm/
@@ -168,6 +169,7 @@ VICA-smarthandle/
 | `workspace.repos` | 세 제품 저장소 URL과 현재 기준 branch manifest |
 | `guideline/` | 시나리오, 아키텍처, BT·파일 구조와 공식 URL |
 | `devlog/` | 중요한 결정, 장애 원인과 실기 검증 기록 |
+| `docs/` | 운영·설계 참고 문서. 실기 기동 절차는 `docs/vica_robot_bringup_manual.md` |
 | `source_file/` | 로컬 하드웨어 매뉴얼·도면 원본, Git 제외 |
 | `vica_ros2_ws/` | 주행, Safety, SLAM, Nav2, motor와 공용 ROS 인터페이스 |
 | `vica-voice-llm/` | 음성 입출력, 긴급어 감지와 목적지 후보 생성 |
