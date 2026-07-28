@@ -516,24 +516,27 @@ E-stop이 래치된 상태로 지속되는 동안 계속 진동하면 사용자�
 **상태: 코드 작성 + 컴파일 + bench 실기 검증 완료 (2026-07-28)**
 7/8 항목 PASS, 8번(단절)만 미확인 — 9.3절 참조.
 
+경로는 모두 `vica_ros2_ws` 저장소 기준이다(이 문서는 별도 저장소에 있다).
+
 | 항목 | 경로 |
 | --- | --- |
-| 확장 펌웨어 | `source_file/smart_handle_firmware/smart_handle_firmware.ino` |
-| bench 시험 도구 | `source_file/smart_handle_firmware/bench_test.py` |
+| 확장 펌웨어 | `src/vica_user_guidance/firmware/smart_handle_firmware/smart_handle_firmware.ino` |
+| bench 시험 도구 | `src/vica_user_guidance/firmware/bench_test.py` |
 | 원본 초안 | 작업공간 외부(`led_servoMotor.txt`). 저장소에 포함하지 않음 |
 
-> 아두이노 IDE는 스케치 폴더명과 `.ino` 파일명이 같아야 하므로 폴더를 함께 만든다.
+> 아두이노 IDE는 스케치 폴더명과 `.ino` 파일명이 같아야 하므로 `smart_handle_firmware/`
+> 하위 디렉터리를 유지한다.
 
-> **[GAP] 현재 위치는 git에서 추적되지 않는다.** `.gitignore` 11행의 `/source_file/`이
-> 이 경로를 통째로 제외한다(`source_file/`은 원래 매뉴얼·데이터시트 보관용). 펌웨어는
-> 형상관리 대상 코드이므로 다음 중 하나를 사용자 결정으로 정해야 한다.
+> **[해결됨 2026-07-28]** 처음에는 작업공간 루트의 `source_file/`에 두었으나, 루트
+> `.gitignore`가 `/source_file/`을 제외해 **bench로 검증한 펌웨어가 어느 저장소에도
+> 커밋되지 않는 상태**였다. `vica_user_guidance` 패키지 안으로 옮겨 해결했다.
 >
-> 1. `.gitignore`에 예외 추가 — `!/source_file/smart_handle_firmware/`
-> 2. 추적되는 경로로 이동 — 예: `vica_ros2_ws/src/vica_user_guidance/firmware/`
+> 같은 패키지에 두는 이유는 형상관리뿐이 아니다. 펌웨어와 ROS 드라이버가 **1바이트
+> 상태코드 프로토콜을 공유**하므로, 같은 위치에 있어야 한쪽만 바뀌는 일을 막을 수
+> 있다. `test_protocol.py`가 `.ino`를 직접 읽어 상수 일치를 검사하며, 파일이 없으면
+> skip이 아니라 실패한다.
 >
-> **2안을 권장한다.** Phase 2에서 만들 `vica_user_guidance` 패키지와 펌웨어는 상태코드
-> 프로토콜을 공유하므로, 같은 위치에 두면 프로토콜 변경 시 양쪽을 함께 수정하게 된다.
-> 다만 패키지가 아직 없으므로 지금은 현재 위치를 유지하고 Phase 2에서 함께 옮긴다.
+> `source_file/`은 원래 목적인 매뉴얼·데이터시트 보관용으로 남긴다.
 
 #### 빌드 환경 (2026-07-28 실행 확인)
 
@@ -549,7 +552,9 @@ arduino-cli core install arduino:avr           # 1.8.8
 arduino-cli lib install "Adafruit NeoPixel"    # 1.15.5
 arduino-cli lib install "Servo"                # 1.3.0 — AVR 코어에 미포함, 별도 설치 필요
 
-arduino-cli compile --fqbn arduino:avr:nano source_file/smart_handle_firmware
+# 이하 vica_ros2_ws 저장소 루트에서 실행한다
+arduino-cli compile --fqbn arduino:avr:nano \
+  src/vica_user_guidance/firmware/smart_handle_firmware
 ```
 
 컴파일 결과 — 사용자 코드 경고 없음(경고는 모두 AVR 코어 `new.cpp` 내부).
@@ -631,9 +636,9 @@ pip install --user pyserial     # 3.5 확인
 
 # 업로드 (나노 부트로더가 구형이면 --fqbn arduino:avr:nano:cpu=atmega328old)
 arduino-cli upload -p /dev/ttyUSB0 --fqbn arduino:avr:nano \
-  source_file/smart_handle_firmware
+  src/vica_user_guidance/firmware/smart_handle_firmware
 
-cd source_file/smart_handle_firmware
+cd src/vica_user_guidance/firmware
 python3 bench_test.py --list          # 항목 확인
 python3 bench_test.py --case 1        # 개별 실행
 python3 bench_test.py --all           # 전체 순차 실행 + 요약
@@ -799,6 +804,7 @@ ls -l /dev/vica_smart_handle
 | 1 | `TurnGuide`·`SmartHandleState` msg | `colcon build` + `ros2 interface show` |
 | 2 | 순수 로직 5개 모듈 + 테스트 | pytest 84 passed |
 | 3 | 노드 2개 + launch + config | mock 통합 (상태 전이 로그 확인) |
+| 5 | 펌웨어를 패키지 안으로 이동 | pytest 85 passed, 새 경로 컴파일 성공 |
 
 mock 통합에서 확인한 전이:
 `estop_stale→ESTOP` → `NORMAL` → `LEFT` → `NORMAL` → `RIGHT` → `NORMAL`,
@@ -817,14 +823,12 @@ mock 통합에서 확인한 전이:
 
 ### 10.3 남은 작업
 
-1. **Step 5 — 펌웨어 이동**: `source_file/smart_handle_firmware/` →
-   `vica_ros2_ws/src/vica_user_guidance/firmware/`. 현재 `.gitignore`의
-   `/source_file/`에 막혀 추적되지 않는다. 로직 구현과 **별도 커밋**으로 분리한다.
-2. **bench 8번**: `LINK_LOST` 확인. 전송 중단 방식으로 대체 가능하다.
-3. **udev 규칙**: 9.2절. 적용 후 config 기본값을 변경한다.
-4. **실기 시리얼 검증**: `enable_serial:=true`로 mock이 아닌 실제 전송 확인.
-5. **Phase 5 (HIL)**: AGENTS.md 5장 조건(바퀴 부양·주변 통제·물리 E-stop) 충족 시
+1. **bench 8번**: `LINK_LOST` 확인. 전송 중단 방식으로 대체 가능하다.
+2. **udev 규칙**: 9.2절. 적용 후 config 기본값을 변경한다.
+3. **실기 시리얼 검증**: `enable_serial:=true`로 mock이 아닌 실제 전송 확인.
+4. **Phase 5 (HIL)**: AGENTS.md 5장 조건(바퀴 부양·주변 통제·물리 E-stop) 충족 시
    사용자 승인 후 진행. 회전 임계값 25°를 실주행으로 확정한다.
+5. **`dev` 머지**: Phase 5 통과 후 `feat/user-guidance`를 머지한다(10.2절).
 
 > Phase 5 전에 **`/odom` yaw 드리프트 측정**을 권한다. AGENTS.md 6장이 D455 IMU 융합을
 > `[미검증]`으로 규정하므로, 정지 상태에서 yaw가 흔들리면 회전 오탐이 난다.
