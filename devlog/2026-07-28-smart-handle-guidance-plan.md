@@ -1,8 +1,12 @@
 # Smart Handle 시각·촉각 안내 구현 설계안 및 계획서
 
 작성일: 2026-07-28
-대상: `vica_ros2_ws/` (branch `feat/safety-steady-clock` 기준 확인, 구현은 `dev`)
-상태: **전체 `[TARGET]`** — 현재 워크스페이스에 ROS 구현 없음
+대상: `vica_ros2_ws/` — 구현 브랜치 `feat/user-guidance`
+      (실주행 검증 완료 후 `dev`로 머지. 10.2절)
+상태: **Phase 1~4 구현 완료 / 실기 검증 `[미검증]`** — 진행 상태는 10절
+
+> 이 문서는 설계 초안으로 시작해 구현·bench 실측 결과를 함께 기록한다. 앞부분의
+> 설계 근거와 뒷부분의 실측 결과가 충돌하면 **실측이 우선**이다.
 
 참고 자료: `/home/msk/led_servoMotor.txt` (아두이노 나노 펌웨어 초안, 166줄)
 근거 문서: `guideline/vica_architecture.md` 12장, `guideline/vica_scenario.md` 7장,
@@ -785,11 +789,42 @@ ls -l /dev/vica_smart_handle
 
 ---
 
-## 10. 다음 작업
+## 10. 진행 상태와 다음 작업
 
-Phase 4 펌웨어 코드는 작성 완료했다. 컴파일과 실기 검증이 남아 있다.
-Phase 1·2는 하드웨어 없이 즉시 착수 가능하며 안전 경로를 건드리지 않는다.
-사용자 승인 시 `dev` 브랜치에서 인터페이스 정의부터 시작한다.
+### 10.1 완료 (2026-07-28)
 
-현재 브랜치가 `feat/safety-steady-clock`이므로, 작업 전 브랜치 정리 방침을
-확인한다(`vica_ros2_ws/`는 하위 지침에 따라 `dev`에서만 수정).
+| Phase | 내용 | 검증 |
+| --- | --- | --- |
+| 4 | 펌웨어 확장 | 컴파일 + bench 7/8 PASS |
+| 1 | `TurnGuide`·`SmartHandleState` msg | `colcon build` + `ros2 interface show` |
+| 2 | 순수 로직 5개 모듈 + 테스트 | pytest 84 passed |
+| 3 | 노드 2개 + launch + config | mock 통합 (상태 전이 로그 확인) |
+
+mock 통합에서 확인한 전이:
+`estop_stale→ESTOP` → `NORMAL` → `LEFT` → `NORMAL` → `RIGHT` → `NORMAL`,
+도착 시 `ARRIVED` 4.0초 유지 후 복귀, `goal_failed`는 도착으로 오인하지 않음.
+
+### 10.2 브랜치 방침
+
+| 저장소 | 브랜치 | 방침 |
+| --- | --- | --- |
+| 루트 (문서) | `dev` | 문서는 `dev`에 직접 커밋한다 |
+| `vica_ros2_ws` | `feat/user-guidance` | **실주행 검증 완료 후 `dev`로 머지한다** |
+
+> ROS 구현을 별도 브랜치에 두는 이유: 실기 검증이 끝나지 않은 코드가 `dev`에 들어가면
+> 다른 팀원이 `dev`를 받아 쓸 때 미검증 상태임을 알기 어렵다. 브랜치로 격리해 경계를
+> 명확히 한다. **머지 조건은 Phase 5(HIL) 통과다.**
+
+### 10.3 남은 작업
+
+1. **Step 5 — 펌웨어 이동**: `source_file/smart_handle_firmware/` →
+   `vica_ros2_ws/src/vica_user_guidance/firmware/`. 현재 `.gitignore`의
+   `/source_file/`에 막혀 추적되지 않는다. 로직 구현과 **별도 커밋**으로 분리한다.
+2. **bench 8번**: `LINK_LOST` 확인. 전송 중단 방식으로 대체 가능하다.
+3. **udev 규칙**: 9.2절. 적용 후 config 기본값을 변경한다.
+4. **실기 시리얼 검증**: `enable_serial:=true`로 mock이 아닌 실제 전송 확인.
+5. **Phase 5 (HIL)**: AGENTS.md 5장 조건(바퀴 부양·주변 통제·물리 E-stop) 충족 시
+   사용자 승인 후 진행. 회전 임계값 25°를 실주행으로 확정한다.
+
+> Phase 5 전에 **`/odom` yaw 드리프트 측정**을 권한다. AGENTS.md 6장이 D455 IMU 융합을
+> `[미검증]`으로 규정하므로, 정지 상태에서 yaw가 흔들리면 회전 오탐이 난다.
