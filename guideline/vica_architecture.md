@@ -160,6 +160,10 @@ float64 detected_at
 | `/navigate_to_pose` | Nav2 action | Mission Manager | Nav2 | 운영 Goal 단일 권한 |
 | `/vica/mission/request_destination` | `RequestDestination` | Flutter, CLI | Mission Manager | UUID·지도·Mission gate를 거치는 공개 요청 |
 | `/vica/mission/reload_destinations` | `Trigger` | destination manager | Mission Manager | YAML 변경 후 catalog 교체 |
+| `/vica/mission/cancel_destination` | `MissionCommand` | Flutter | Mission Manager | 진행 중 안내 취소, 실기 `[미검증]` |
+| `/vica/mission/pause_navigation` | `MissionCommand` | Flutter | Mission Manager | 목적지 보관 후 일시정지, 실기 `[미검증]` |
+| `/vica/mission/resume_navigation` | `MissionCommand` | Flutter | Mission Manager | 보관 목적지로 재출발, 실기 `[미검증]` |
+| `/vica_goal_event` | JSON `String` | Mission Manager | status app node, vica_goto_goal | goal 생명주기 이벤트, `goal_paused` 포함 |
 | `/app_estop_activate` | `Trigger` | Flutter client | app_emergency_node | vica_safety launch 포함, runtime `[미검증]` |
 | `/app_estop_reset` | `Trigger` | Flutter client | app_emergency_node | 전체 reset 오케스트레이션 진입점 |
 | `/safety_reset` | `Trigger` | 유지보수 CLI | app_emergency_node | 앱과 같은 절차, 호출자 인증 `[GAP]` |
@@ -588,10 +592,15 @@ STT /voice_emergency_stop ──┘   ├─ source 상태·freshness 관리
 - `/robot_status` 기반 로봇 상태 표시
 - `/app_estop_state` 기반 앱 E-stop 표시
 - E-stop activate/reset service 호출
+- 진행 중 안내의 취소·일시정지·재개 요청(`MissionCommand` service 3종)
 - 연결·오류·E-stop·장소 관리 로그
 - 목표: IDLE(사용자 미이용) 한정 원격 목적지 요청 — 앱 장소 선택을 Mission Manager 경유로 전달(`vica_scenario.md` 10.5절). 수동 teleop은 범위 제외.
 
 앱은 안전 계층이나 motor path를 우회하지 않는다. 원격 목적지 요청도 Mission Manager gate와 안전 계층을 거친다.
+
+앱은 요청 가능 여부를 스스로 판정하지 않는다. 앱이 가진 장소 정보는 마지막으로 받아온
+사본이라 최신이 아닐 수 있어, 권한·접근성·Safety·Nav2 검증은 `vica_goto_goal`, LLM과
+동일하게 Mission Manager가 담당한다. 앱은 요청을 보내고 `accepted`와 `message`만 표시한다.
 
 ### 10.2 현재 로그인 상태
 
@@ -613,9 +622,37 @@ Flutter source에는 `AuthGate`, `LoginScreen`, `AuthProvider`와 로컬 관리�
 - map ID와 가까운 저장 장소명
 
 상태 우선순위는 오류 → 위치 미확보 → goal/속도 기반 moving → waiting이다.
+일시정지는 `status="waiting"`과 `waiting_reason="일시정지"`로 표현하며, 재개할 목적지를
+앱이 보여줄 수 있도록 `current_goal`을 유지한다.
 
 Mission Manager가 `/vica_goal_event`를 발행하도록 연결했으며 앱 표시 runtime은
 `[미검증]`이다.
+
+구독 입력은 모두 monotonic 기준 만료를 적용한다. `/diagnostics`는 여러 노드가 함께 쓰는
+공용 topic이고 각 메시지가 그 발행자의 상태만 담으므로, 마지막 메시지 하나만 보관하면
+ERROR 발행자와 정상 발행자가 번갈아 도착할 때 오류 표시가 깜빡인다. 항목별로 누적하고
+확정·해제에 지연을 둔다.
+
+### 10.3.1 안내 취소·일시정지·재개
+
+E-stop과 성격이 다른 별도 경로다. 안전 사건이 아니라 목표 조작이므로 래치와 reset이 없다.
+
+| 구분 | 취소·일시정지 | E-stop |
+| --- | --- | --- |
+| 목적 | 목표 철회 | 위험 차단 |
+| 정지 방식 | Nav2 감속 정지 | `/cmd_vel_safe=0` |
+| 래치 | 없음 | 중앙 래치 |
+| 해제 | 불필요 | 관리자 reset |
+| 이후 상태 | `IDLE` 또는 `PAUSED` | `ESTOPPED` |
+
+일시정지는 Nav2 goal을 취소하되 목적지를 `MissionLogic.paused_destination`에 보관하고,
+재개 요청 시 그 목적지로 새 goal을 만든다. E-stop이 활성화되면 보관분을 폐기해
+"E-stop 해제 후 이전 Goal을 자동 재개하지 않는다"는 원칙을 유지한다.
+
+요청 주체는 앱(`MissionCommand` service)과 음성(`VicaIntent.intent`의
+`cancel`/`pause`/`resume`)이며 둘 다 같은 게이트를 통과한다. 음성 취소는 오인식 시
+안내가 끊기므로 Mission Manager가 되물어 확인한 뒤에만 실제로 취소하고, 확인을
+기다리는 동안 주행은 계속한다. 앱은 관리자 로그인과 확인 대화상자를 거치므로 재확인이 없다.
 
 ### 10.4 앱 E-stop bridge
 
