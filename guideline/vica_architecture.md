@@ -640,10 +640,22 @@ E-stop과 성격이 다른 별도 경로다. 안전 사건이 아니라 목표 �
 | 구분 | 취소·일시정지 | E-stop |
 | --- | --- | --- |
 | 목적 | 목표 철회 | 위험 차단 |
-| 정지 방식 | Nav2 감속 정지 | `/cmd_vel_safe=0` |
+| 정지 방식 | goal 취소 후 `velocity_smoother` 감속 램프 | `/cmd_vel_safe=0` 강제 |
 | 래치 | 없음 | 중앙 래치 |
 | 해제 | 불필요 | 관리자 reset |
 | 이후 상태 | `IDLE` 또는 `PAUSED` | `ESTOPPED` |
+
+Mission Manager는 `cancelTask()`로 `NavigateToPose` goal을 취소할 뿐 감속을 지시하지
+않는다. 취소되면 `controller_server`가 `/cmd_vel` 발행을 멈추고, 그 뒤를
+`velocity_smoother`가 `max_decel`(현재 `[-1.0, 0.0, -1.2]`) 기울기로 0까지 이어 붙여
+감속 램프를 만든다. 이 값은 도착·취소·controller 정지에 전역 적용되며 `[미검증]`
+트레이드오프로 남아 있어 실기에서 확정한다.
+
+감속 램프도 명령이므로 Safety Supervisor의 freshness 판정에는 살아 있는 명령으로 보인다.
+따라서 `velocity_smoother.velocity_timeout`(0.4 s)은 `safety_supervisor_node`의
+`cmd_timeout_sec`(0.5 s)보다 짧게 유지해야 하며,
+`vica_nav2/test/test_nav2_params_contract.py`가 이 관계를 강제한다. 비상정지는 이 경로를
+타지 않고 Safety가 `/cmd_vel_safe=0`을 직접 강제한다.
 
 일시정지는 Nav2 goal을 취소하되 목적지를 `MissionLogic.paused_destination`에 보관하고,
 재개 요청 시 그 목적지로 새 goal을 만든다. E-stop이 활성화되면 보관분을 폐기해

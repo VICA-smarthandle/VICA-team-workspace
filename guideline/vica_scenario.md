@@ -478,11 +478,17 @@ reset 명령이 아니다. 관리자 인증과 유지보수 호출자 접근 통
 | 구분 | 취소·일시정지 | 긴급정지 |
 | --- | --- | --- |
 | 판단 기준 | 마음이 바뀜 | 위험 발생 |
-| 정지 방식 | Nav2 감속 정지 | `/cmd_vel_safe=0` |
+| 정지 방식 | goal 취소 후 `velocity_smoother` 감속 램프 | `/cmd_vel_safe=0` 강제 |
 | 해제 절차 | 없음 | 관리자 reset |
 | 이후 | 즉시 새 요청 가능 | reset 전까지 불가 |
 
 기준이 애매하면 긴급정지를 사용한다. 취소는 편의 기능이고 긴급정지는 안전 장치다.
+
+Mission Manager는 goal을 취소할 뿐 감속을 지시하지 않는다. 취소되면 `controller_server`가
+`/cmd_vel` 발행을 멈추고 `velocity_smoother`가 `max_decel` 기울기로 0까지 감속 램프를
+만든다. 정지감이 어색하면 `nav2_params.yaml`의 `velocity_smoother.max_decel`을 조정하되,
+`velocity_timeout`이 Safety의 `cmd_timeout_sec`보다 짧아야 한다는 제약을 함께 확인한다
+(`vica_architecture.md` 10.3.1절).
 
 ### 목적지 취소
 
