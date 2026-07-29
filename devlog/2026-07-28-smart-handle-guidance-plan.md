@@ -744,30 +744,43 @@ AGENTS.md 5장에 따라 **바퀴를 띄운 상태, 주변 통제, 물리 E-stop
 | 펌웨어 경로 | **`vica_user_guidance/firmware/`로 이동 승인.** 로직 구현과 **별도 커밋**으로 분리 |
 | 햅틱 하드웨어 | **준비 완료**(6.3절). Phase 6 선행 조건에서 제외 |
 
-### 9.2 udev 규칙 (승인, 작업 대기)
+### 9.2 udev 규칙 — 파일 작성 완료, 설치 대기 (2026-07-29)
 
-`/dev/ttyUSB0`는 USB 재열거 시 번호가 바뀌므로 고정 이름을 부여한다.
+규칙 파일은 `vica_user_guidance/udev/99-vica-smart-handle.rules`에 있다.
+`setup.py`가 `share/`에도 설치하므로 소스 트리 없는 배포 환경에서도 꺼내 쓸 수 있다.
 
-```bash
-# 1) 장치 식별자 확인 (아두이노 연결 상태)
-udevadm info -a -n /dev/ttyUSB0 | grep -E 'idVendor|idProduct|serial' | head
+**실측한 칩은 CH340이 아니라 FTDI FT232R이었다** (초안의 `1a86:7523`은 추정값이었다).
 
-# 2) /etc/udev/rules.d/99-vica-smart-handle.rules
-#    idVendor/idProduct는 1)의 실제 값으로 치환한다
-SUBSYSTEM=="tty", ATTRS{idVendor}=="1a86", ATTRS{idProduct}=="7523", \
-  SYMLINK+="vica_smart_handle", MODE="0660", GROUP="dialout"
+| 속성 | 값 |
+| --- | --- |
+| `idVendor:idProduct` | `0403:6001` (FTDI FT232R) |
+| `serial` | `B003UMKG` |
 
-# 3) 적용
-sudo udevadm control --reload-rules && sudo udevadm trigger
-ls -l /dev/vica_smart_handle
+```
+SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001",
+  ATTRS{serial}=="B003UMKG", SYMLINK+="vica_smart_handle",
+  MODE="0660", GROUP="dialout", ENV{ID_MM_DEVICE_IGNORE}="1"
 ```
 
-- `MODE="0660"` + `GROUP="dialout"`을 두면 현재의 `chmod 666` 임시 조치가 불필요해진다.
-  **단 `dialout` 그룹 가입과 재로그인이 선행되어야 한다.**
-- **CH340 계열은 흔한 칩이라 같은 칩을 쓰는 다른 USB 장치에도 링크가 걸릴 수 있다.**
-  `serial` 속성이 있으면 조건에 함께 넣어 장치를 특정한다.
+- **`serial`을 반드시 조건에 넣는다.** `0403:6001`은 FT232R 계열 전체가 공유하는
+  값이라 다른 FTDI 장치에도 같은 링크가 걸린다. **보드 교체 시 규칙도 갱신한다.**
+- **`ID_MM_DEVICE_IGNORE`** — 이 장비의 ModemManager가 `active`다. 시리얼 포트를
+  모뎀으로 오인해 AT 명령을 탐침하면 DTR 토글로 나노가 리셋되고 수신 바이트가
+  오염된다. 증상이 간헐적이라 원인 파악이 어려우므로 미리 막는다.
+- `MODE="0660"` + `GROUP="dialout"`으로 `chmod 666` 임시 조치를 대체한다.
+  `dialout` 그룹 가입은 **2026-07-29 반영 확인 완료**.
 - config 기본값 변경은 **규칙 적용을 확인한 뒤** 한다. 규칙 없이 먼저 바꾸면 모든
   실행이 `FAULT_PORT_OPEN`이 된다.
+
+> **설치는 사용자가 직접 해야 한다.** `sudo`가 TTY를 요구하는데 에이전트 셸에는
+> TTY가 없고 askpass 헬퍼도 설치되어 있지 않다. 일반 터미널에서 실행한다.
+>
+> ```bash
+> cd vica_ros2_ws/src/vica_user_guidance
+> sudo cp udev/99-vica-smart-handle.rules /etc/udev/rules.d/
+> sudo udevadm control --reload-rules && sudo udevadm trigger
+> ls -l /dev/vica_smart_handle
+> ```
 
 
 ### 9.3 다른 저장소·패키지로 넘길 항목
@@ -787,10 +800,14 @@ ls -l /dev/vica_smart_handle
 
 | 항목 | 사유 |
 | --- | --- |
-| `LINK_LOST` 빨간색 표시 | bench 8번 미수행. USB가 유일한 전원이라 케이블 분리 불가 |
-| 워치독 1.5초 발동 | 위와 동일 |
+| 회전 임계값 25°/10°/0.6s | 실주행 측정 전. Phase 5에서 확정 |
+| `/odom` yaw 품질 | AGENTS.md 6장이 D455 IMU 융합을 `[미검증]`으로 규정 |
+| `servo_ok`/`*_led_ok` | 상향 통신이 없어 구조적으로 관측 불가 |
 | 충전 상태(코드 6·7) | 미구현 |
 | 햅틱 전체 | 장치 미장착 |
+
+**2026-07-29 해소:** `LINK_LOST` 빨간색 표시와 워치독 1.5초 발동은 bench 8번을
+전송 중단 방식으로 재작성해 검증했다(10.1절).
 
 ---
 
@@ -810,6 +827,40 @@ mock 통합에서 확인한 전이:
 `estop_stale→ESTOP` → `NORMAL` → `LEFT` → `NORMAL` → `RIGHT` → `NORMAL`,
 도착 시 `ARRIVED` 4.0초 유지 후 복귀, `goal_failed`는 도착으로 오인하지 않음.
 
+### 10.1b 실기 검증 완료 (2026-07-29)
+
+| 항목 | 결과 |
+| --- | --- |
+| bench 8/8 | **PASS**. 8번을 전송 중단 방식으로 재작성해 `LINK_LOST`와 복구를 확인 |
+| 실기 시리얼 | **PASS**. `enable_serial:=true`, `connected=true`, `fault_code=0`, `write_error_count=0` |
+
+실제 시리얼로 확인한 전이(펌웨어가 실제로 LED·서보를 구동함을 육안 확인):
+
+```
+NORMAL → LEFT → NORMAL → RIGHT → NORMAL → ARRIVED → NORMAL → ESTOP → NORMAL
+```
+
+- 도착 유지 시간 **4.000초 실측** (`906.341` → `910.341`). 펌웨어 재생 3.5초보다
+  길어 마지막 소등 프레임까지 온전히 재생된다. 2.1절 결함 대응이 실기에서 확인됐다.
+- 회전 진입 지연 **0.79초** (30°/s 자극). 25° 임계 도달 이론값 0.83초와 일치한다.
+
+#### 검증 중 겪은 함정 두 가지 — 둘 다 시험 환경 문제였고 제품 결함이 아니다
+
+**① `/vica_goal_event`는 평문이 아니라 JSON이다.**
+자극 스크립트가 평문 `"goal_succeeded"`를 발행해 도착이 조용히 무시됐다.
+`parse_goal_event`가 `json.loads`에서 실패해 `None`을 반환한 것이다. 실제
+`mission_manager_node._publish_goal_event`는 `{"event": ..., "location_id": ...}`
+형태의 JSON을 발행한다. **이 계층을 시험할 때는 반드시 JSON으로 보낸다.**
+
+> 파싱 실패 시 아무 로그도 남지 않아 원인 파악에 한 번의 디버깅 주기가 들었다.
+> `cb_goal`에 파싱 실패 로그를 남기는 안을 `[TARGET]`으로 남긴다.
+
+**② `ros2 topic pub`가 종료되지 않고 남으면 상태가 진동한다.**
+`{ ... } &` 로 띄운 퍼블리셔를 `kill $!` 하면 래퍼 서브셸만 죽고 실제
+`ros2 topic pub`는 살아남는다. `/estop_state`에 `false`(10Hz)와 `true`(30Hz)가
+동시에 들어와 ESTOP↔NORMAL이 10Hz로 진동했고, LED에 **하늘색과 주황색이 섞여**
+보였다. `ros2 topic info <topic>`의 `Publisher count`로 확인한다.
+
 ### 10.2 브랜치 방침
 
 | 저장소 | 브랜치 | 방침 |
@@ -823,12 +874,13 @@ mock 통합에서 확인한 전이:
 
 ### 10.3 남은 작업
 
-1. **bench 8번**: `LINK_LOST` 확인. 전송 중단 방식으로 대체 가능하다.
-2. **udev 규칙**: 9.2절. 적용 후 config 기본값을 변경한다.
-3. **실기 시리얼 검증**: `enable_serial:=true`로 mock이 아닌 실제 전송 확인.
-4. **Phase 5 (HIL)**: AGENTS.md 5장 조건(바퀴 부양·주변 통제·물리 E-stop) 충족 시
+1. **udev 규칙 설치**: 9.2절. **사용자가 일반 터미널에서 직접 실행한다**(sudo TTY).
+   `/dev/vica_smart_handle` 링크를 확인한 **뒤에** config `serial_port`를 바꾼다.
+2. **Phase 5 (HIL)**: AGENTS.md 5장 조건(바퀴 부양·주변 통제·물리 E-stop) 충족 시
    사용자 승인 후 진행. 회전 임계값 25°를 실주행으로 확정한다.
-5. **`dev` 머지**: Phase 5 통과 후 `feat/user-guidance`를 머지한다(10.2절).
+3. **`dev` 머지**: Phase 5 통과 후 `feat/user-guidance`를 머지한다(10.2절).
+
+> 완료: ~~bench 8번~~, ~~실기 시리얼 검증~~ (2026-07-29, 10.1b절).
 
 > Phase 5 전에 **`/odom` yaw 드리프트 측정**을 권한다. AGENTS.md 6장이 D455 IMU 융합을
 > `[미검증]`으로 규정하므로, 정지 상태에서 yaw가 흔들리면 회전 오탐이 난다.
