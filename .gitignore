@@ -13,6 +13,7 @@
 /source_file/
 /.agents/
 /.codex/
+/.claude/
 
 # Secrets and local environment
 .env
