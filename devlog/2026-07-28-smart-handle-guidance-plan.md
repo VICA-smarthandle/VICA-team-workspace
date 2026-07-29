@@ -853,7 +853,9 @@ NORMAL → LEFT → NORMAL → RIGHT → NORMAL → ARRIVED → NORMAL → ESTOP
 형태의 JSON을 발행한다. **이 계층을 시험할 때는 반드시 JSON으로 보낸다.**
 
 > 파싱 실패 시 아무 로그도 남지 않아 원인 파악에 한 번의 디버깅 주기가 들었다.
-> `cb_goal`에 파싱 실패 로그를 남기는 안을 `[TARGET]`으로 남긴다.
+> **2026-07-29 조치 완료** — `cb_goal`이 파싱 실패를 경고로 남긴다(payload 120자
+> 표시, 5초 throttle). 실기 확인: 평문 payload → 경고 발생, 1초 뒤 다른 잘못된
+> payload → 경고 없음(throttle 동작), 정상 JSON → 도착 4.000초 유지(회귀 없음).
 
 **② `ros2 topic pub`가 종료되지 않고 남으면 상태가 진동한다.**
 `{ ... } &` 로 띄운 퍼블리셔를 `kill $!` 하면 래퍼 서브셸만 죽고 실제
