@@ -694,6 +694,31 @@ AGENTS.md 5장에 따라 **바퀴를 띄운 상태, 주변 통제, 물리 E-stop
 - E-stop 시 회전 cue가 즉시 무시되는지 확인
 - 시리얼 단절 시 펌웨어 워치독 동작 확인
 
+#### 5a / 5b 분리 필요 (2026-07-29 지적)
+
+**바퀴를 띄운 상태로는 임계값을 확정할 수 없다.** 제자리 회전을 명령하면
+
+- 휠 오도메트리는 "회전 중"이라고 보고한다 (바퀴가 도니까)
+- IMU는 "정지"라고 보고한다 (차체가 안 도니까)
+- EKF는 이 둘을 융합하므로 **실제 주행과 다른 yaw**가 나온다
+
+따라서 항목을 나눈다.
+
+| 단계 | 조건 | 확인 항목 |
+| --- | --- | --- |
+| **5a** | 바퀴 띄움 (AGENTS.md 5장 조건으로 충분) | E-stop 우선순위, 워치독, 배선·토픽 연결 |
+| **5b** | 통제 구역 바닥 주행 | **회전 임계값 25° 확정** — 5a로는 불가 |
+
+> 2026-07-29 실기 시리얼 검증에서 `/odom`은 스크립트가 만든 **잡음 0, 정확히
+> 30°/s**인 합성 데이터였다. 실제 EKF yaw는 드리프트와 잡음이 있고 회전 속도도
+> 일정하지 않다. **임계값이 `[미검증]`으로 남아 있는 이유가 이것이다.**
+
+**5b 이전에 정지 상태 yaw 드리프트 측정을 권한다.** 로봇에 전원만 넣고 EKF를 띄운
+뒤 몇 분간 yaw를 기록한다. 주행이 없어 위험하지 않다. 정지 상태에서 yaw가 25°
+근처로 흔들리면 임계값을 조정하기 전에 **EKF 설정부터 손봐야 한다**
+(`vica_localization/config/ekf.yaml`). AGENTS.md 6장이 D455 IMU 융합을
+`[미검증]`으로 규정한다.
+
 ### Phase 6 — 햅틱 (장치 부착 후)
 
 상태코드 3·5에 진동 패턴 추가. 드라이버 회로 검토 선행.
@@ -744,7 +769,7 @@ AGENTS.md 5장에 따라 **바퀴를 띄운 상태, 주변 통제, 물리 E-stop
 | 펌웨어 경로 | **`vica_user_guidance/firmware/`로 이동 승인.** 로직 구현과 **별도 커밋**으로 분리 |
 | 햅틱 하드웨어 | **준비 완료**(6.3절). Phase 6 선행 조건에서 제외 |
 
-### 9.2 udev 규칙 — 파일 작성 완료, 설치 대기 (2026-07-29)
+### 9.2 udev 규칙 — **설치·검증 완료 (2026-07-29)**
 
 규칙 파일은 `vica_user_guidance/udev/99-vica-smart-handle.rules`에 있다.
 `setup.py`가 `share/`에도 설치하므로 소스 트리 없는 배포 환경에서도 꺼내 쓸 수 있다.
@@ -781,6 +806,26 @@ SUBSYSTEM=="tty", ATTRS{idVendor}=="0403", ATTRS{idProduct}=="6001",
 > sudo udevadm control --reload-rules && sudo udevadm trigger
 > ls -l /dev/vica_smart_handle
 > ```
+
+**적용 확인 결과 (2026-07-29):**
+
+| 확인 | 결과 |
+| --- | --- |
+| 규칙 파일 | `/etc/udev/rules.d/99-vica-smart-handle.rules` |
+| 심볼릭 링크 | `/dev/vica_smart_handle` → `ttyUSB0` |
+| 권한 | `root:dialout 0660` — `chmod 666` 임시 조치 불필요해짐 |
+| ModemManager 차단 | `ID_MM_DEVICE_IGNORE=1` |
+| 노드 기동 | `connected=true`, `fault_code=0`, `write_error_count=0` |
+| `arduino-cli upload` | 심볼릭 링크로 정상 동작 (추정 아닌 실행 확인) |
+
+확인 후 기본값을 `/dev/vica_smart_handle`로 바꿨다. `config/user_guidance.yaml`,
+`declare_parameter`, `bench_test.py`, README 모두 같은 값을 쓴다.
+
+> `declare_parameter` 기본값도 함께 바꿨다. launch는 YAML이 덮어쓰지만 `ros2 run`
+> 으로 직접 띄우면 이 값이 쓰인다. 두 값이 어긋나면 **실행 방식에 따라 다른 포트를
+> 열게 되고, 번호가 밀린 다른 USB 장치를 스마트핸들로 오인해 열 수도 있다.**
+> `test_serial_port_default_matches_config`와
+> `test_serial_port_is_not_an_enumeration_dependent_path`가 이를 고정한다.
 
 
 ### 9.3 다른 저장소·패키지로 넘길 항목
@@ -876,13 +921,15 @@ NORMAL → LEFT → NORMAL → RIGHT → NORMAL → ARRIVED → NORMAL → ESTOP
 
 ### 10.3 남은 작업
 
-1. **udev 규칙 설치**: 9.2절. **사용자가 일반 터미널에서 직접 실행한다**(sudo TTY).
-   `/dev/vica_smart_handle` 링크를 확인한 **뒤에** config `serial_port`를 바꾼다.
-2. **Phase 5 (HIL)**: AGENTS.md 5장 조건(바퀴 부양·주변 통제·물리 E-stop) 충족 시
-   사용자 승인 후 진행. 회전 임계값 25°를 실주행으로 확정한다.
-3. **`dev` 머지**: Phase 5 통과 후 `feat/user-guidance`를 머지한다(10.2절).
+1. **`/odom` yaw 드리프트 측정**: 정지 상태에서 몇 분간 기록. 주행이 없어 위험하지
+   않으므로 **지금 할 수 있다.** 결과에 따라 Phase 5b 전에 EKF 설정을 손봐야 할
+   수도 있다.
+2. **Phase 5a (바퀴 띄움)**: E-stop 우선순위·워치독·배선 확인. AGENTS.md 5장 조건.
+3. **Phase 5b (바닥 주행)**: 회전 임계값 25° 확정. **5a로는 불가하다** — Phase 5절.
+4. **`dev` 머지**: Phase 5 통과 후 `feat/user-guidance`를 머지한다(10.2절).
 
-> 완료: ~~bench 8번~~, ~~실기 시리얼 검증~~ (2026-07-29, 10.1b절).
+> 완료: ~~bench 8번~~, ~~실기 시리얼 검증~~, ~~udev 규칙 설치·전환~~
+> (2026-07-29, 9.2절·10.1b절).
 
 > Phase 5 전에 **`/odom` yaw 드리프트 측정**을 권한다. AGENTS.md 6장이 D455 IMU 융합을
 > `[미검증]`으로 규정하므로, 정지 상태에서 yaw가 흔들리면 회전 오탐이 난다.
