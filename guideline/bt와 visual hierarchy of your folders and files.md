@@ -23,9 +23,35 @@
 - 단일 목적지: `navigate_to_pose_w_replanning_and_recovery.xml`
 - 다중 경유지: `navigate_through_poses_w_replanning_and_recovery.xml`
 - VICA Mission Manager가 현재 호출하는 액션: `NavigateToPose`
-- 경로 계획기: NavFn
+- 경로 계획기: `SmacPlanner2D` (2026-07-28 NavFn에서 교체)
 - 경로 추종기: DWB
 - 복구 동작: 비용지도 초기화, 회전, 대기, 후진 등 Nav2 기본 복구 노드
+
+기본 BT의 복구 분기 실측값(2026-07-29):
+
+```text
+RecoveryNode "NavigateRecovery"  number_of_retries=6
+├─ PipelineSequence            RateController 1 Hz + ComputePathToPose / FollowPath
+│   각 작업 실패 시 해당 costmap만 초기화하고 1회 재시도
+└─ ReactiveFallback → RoundRobin  (부를 때마다 다음 것 하나씩)
+    ① ClearEntireCostmap(local) + ClearEntireCostmap(global)
+    ② Spin    spin_dist=1.57 rad
+    ③ Wait    wait_duration=5 s
+    ④ BackUp  backup_dist=0.30 m, speed=0.05 m/s
+```
+
+이 복구 분기는 현재 VICA에서 사실상 작동하지 않는다. 실측 기준은 다음과 같다.
+
+- `Spin`은 0.10 s, `BackUp`은 0.0005 s 만에 `Collision Ahead`로 중단된다. 두 동작 모두
+  padded footprint를 미리 스윕해 검사하는데, 차체가 0.905 m로 길어 통로에서 거의 항상
+  막힌다. 실제 회전량은 1.57 rad 목표에 대해 0.3~23.3°에 그쳤다.
+- 복구 1바퀴 7 s 중 **`Wait 5 s`가 79 %**를 차지한다. 시간을 줄이려면 `BackUp`이 아니라
+  `wait_duration`을 봐야 한다.
+- 실서비스에서는 사람이 핸들을 잡고 뒤에 선다(`vica_scenario.md` 2-1). 그 사람은 padded
+  footprint 후단(-0.65 m) 바깥이라 costmap에 장애물로 잡히고, `BackUp` 스윕(-0.65 →
+  -0.95 m)과 `Spin` 스윕(반경 0.707 m)에 모두 걸린다. 즉 두 동작은 **영구히 실패한다.**
+  반대로 트인 곳에서는 검사를 통과해 실제로 사람 쪽으로 후진하므로, 안전상 `BackUp`
+  제거가 필요하다. `min_vel_x: 0.0`은 DWB만 막고 `behavior_server`에는 적용되지 않는다.
 
 아래 그림은 저장소 설정과 Nav2 기본 동작을 기준으로 단순화한 개념도다. 실제 BT 노드와 포트의 최종 기준은 실행 중 선택된 Nav2 설치본의 XML이다.
 

@@ -262,7 +262,7 @@ Mission Manager는 다음 조건을 모두 검사한다.
 1. Mission Manager가 `map` frame의 goal을 한 번 전송한다.
 2. Nav2는 저장 지도, AMCL, costmap, planner와 controller를 사용한다.
 3. 현재 설정은 사용자 정의 BT XML이 아니라 Nav2 Humble 기본 NavigateToPose BT를 사용한다.
-4. global planner는 Navfn, local controller는 DWB다.
+4. global planner는 `SmacPlanner2D`, local controller는 DWB다(2026-07-28 NavFn에서 교체).
 5. global costmap은 `/scan`, local costmap은 `/scan`과 nvblox slice를 장애물 입력으로 사용한다.
 6. controller 내부 출력 `/cmd_vel_nav`는 velocity smoother를 거쳐 `/cmd_vel_req`로 나간다.
 7. Safety Supervisor가 승인한 `/cmd_vel_safe`만 motor가 받는다. 실제 종단은 `[미검증]`이다.

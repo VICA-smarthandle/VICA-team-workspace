@@ -287,15 +287,28 @@ E-stop reset 뒤 이전 goal은 자동 재개하지 않는다.
 
 | 영역 | 현재 설정 |
 | --- | --- |
-| Global planner | `nav2_navfn_planner/NavfnPlanner` |
+| Global planner | `nav2_smac_planner/SmacPlanner2D` (2026-07-28 NavFn에서 교체) |
 | Local controller | `dwb_core::DWBLocalPlanner` |
+| DWB obstacle critic | `ObstacleFootprint` (scale 0.15). `BaseObstacle`은 원형 가정이라 부적합 |
 | 최대 직선 속도 | 0.26 m/s |
 | DWB 최대 회전 속도 | 0.4 rad/s |
 | Goal 접근 속도 | 경로 잔여거리 3.0 m부터 직선·회전 최대속도의 70% |
 | Goal tolerance | x/y 0.25 m, yaw 0.25 rad |
 | Local costmap | `odom`, voxel(`/scan`) + nvblox slice + inflation |
 | Global costmap | `map`, static + obstacle + inflation, `/scan` |
-| Footprint | 전방 0.15 m, 후방 -0.60 m, 좌우 ±0.1875 m |
+| Footprint | 전방 0.305 m, 후방 -0.60 m, 좌우 ±0.227 m, padding 0.05 (2026-07-27 실측) |
+| inflation | `inflation_radius` 0.45, `cost_scaling_factor` 3.5 |
+
+footprint는 2026-07-27 전방 좌측 범퍼 실충돌 뒤 `vica_description/meshes/base_link.stl`
+실측으로 교정한 값이다. 구값(전방 0.15, 좌우 ±0.1875)은 실제 차체보다 전방 15.5 cm,
+좌우 각 4 cm 작아 Nav2가 그만큼을 free 공간으로 오인했다.
+`vica_nav2/test/test_footprint_contract.py`가 이 회귀를 감시한다.
+
+여기서 파생되는 구조적 제약이 하나 있다. footprint 내접반경은 0.277 m인데
+외접반경은 0.707 m로 **2.6배** 차이가 난다(핸들 때문에 차체가 0.905 m로 길다).
+`SmacPlanner2D`는 중심 셀 비용만 보는 **점 로봇 planner**라 내접반경만 보장한다.
+그래서 planner가 "통과 가능"으로 그린 자리에서 DWB의 `ObstacleFootprint`가
+회전 궤적을 전부 거부해 로봇이 굳는 사례가 실측됐다(2026-07-29, `[GAP]`).
 
 `nvblox_layer`는 local costmap `plugins`에 포함되며
 `nvblox::nav2::NvbloxCostmapLayer`를 사용한다. slice 입력은
@@ -313,6 +326,18 @@ costmap→Goal 종단은 `[미검증]`이다.
 nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
 nav2_bt_navigator/navigate_through_poses_w_replanning_and_recovery.xml
 ```
+
+복구 동작의 속도 명령은 `behavior_server`가 직접 발행한다. Nav2 humble
+`navigation_launch.py`는 `controller_server`에만 `('cmd_vel', 'cmd_vel_nav')`를 주고
+`behavior_server`에는 remap을 주지 않아, 기본 상태에서는 `/cmd_vel`로 나간다.
+VICA에는 그 토픽 구독자가 없어 **복구 동작이 한 번도 로봇을 움직이지 못했다**
+(2026-07-29 실측: `/cmd_vel` 발행자 5·구독자 0). `vica_nav2` launch에서 노드 지정
+remap `behavior_server:cmd_vel:=/cmd_vel_req`로 Safety 경로에 연결했다.
+
+접두사 없는 전역 `cmd_vel` remap은 쓰면 안 된다. launch_ros가 global remap을
+node-level보다 먼저 붙이고 rcl은 첫 일치 규칙을 쓰므로, `controller_server`의
+`cmd_vel:=cmd_vel_nav`를 덮어써 velocity_smoother를 건너뛴다.
+`test_nav2_launch_contract.py`가 두 규칙을 함께 감시한다.
 
 상세 BT와 Mission decision flow는 `bt와 visual hierarchy of your folders and files.md`에 정리한다.
 
