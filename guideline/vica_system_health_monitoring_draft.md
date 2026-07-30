@@ -514,6 +514,16 @@ simulation time 변경에 영향을 덜 받는다.
 | progress timeout | 목표 취소, 안전정지 |
 | 반복 recovery | 제한 횟수 초과 시 FAULT |
 | mission heartbeat | manager 종료 시 goal 취소 또는 정지 |
+| nvblox costmap slice age/Hz `[TARGET]` | ~9Hz 기대(`docs/vica_robot_bringup_manual.md`). age 임계 초과 시 WARN/DEGRADED (정지 등급은 팀 결정, §19) |
+
+`/nvblox_node/static_map_slice`는 Nav2 local costmap의 `nvblox_layer`(3D 장애물)의 유일한 입력이다
+(`vica_ros2_ws/src/vica_nav2/config/nav2_params.yaml`). 그러나 이 layer에는 LiDAR `scan` 소스와 달리
+`expected_update_rate`/timeout이 없어, GPU 경합·포화로 slice 발행이 느려지거나 멈춰도 costmap이 감지하지
+못하고 오래된 장애물 격자로 주행한다. `vica_safety`는 slice를 구독하지 않으므로 이 저하는 §10.1 빠른 안전
+경로(E-stop)로 걸리지 않고 회피 실패(충돌) 위험으로만 나타난다. 따라서 slice age/Hz는 health monitor의 진단
+항목으로 포함하되(§3.1 원칙대로 즉시 정지 경로에는 넣지 않는다), 저하 시 정지 등급은 §19 팀 결정으로 확정한다.
+GPU 경합/포화 자체의 관측은 §8.7의 Jetson GPU util(tegrastats `GR3D_FREQ`)로 하며, 실측 도구는
+`scripts/measure_nvblox_stt_contention.sh`다.
 
 ### 8.6 Voice, LLM, TTS
 
@@ -542,6 +552,8 @@ simulation time 변경에 영향을 덜 받는다.
 - CPU/GPU 온도
 - fan 상태
 - GPU memory와 OOM
+- GPU 사용률(util) 포화 — 상시 ~100% 지속 시 nvblox 등 GPU 작업 경합 (tegrastats `GR3D_FREQ`)
+- 전력·클럭 모드 고정 여부 (`nvpmodel`/`jetson_clocks`) — 미고정 시 DVFS로 경합 악화
 - 시스템 시간 동기화
 - 프로세스 재시작 횟수
 - 전원 및 배터리 상태
@@ -577,6 +589,7 @@ simulation time 변경에 영향을 덜 받는다.
 | 앱 연결 단절 | WARN/DEGRADED | 로컬 기능 유지 | reconnect | 연결 회복 |
 | 디스크 부족 | DEGRADED/FAULT | 녹화 중단, 경고 | 오래된 정책 로그 정리 검토 | 여유 공간 확보 |
 | GPU OOM | DEGRADED | 음성/비전 기능 중지 | 해당 process 재시작 | 자원 정상 |
+| nvblox slice stale (GPU 경합/포화) | STOP/DEGRADED `[TARGET]` | (팀 확정) costmap 신선도 경고, 필요 시 감속·정지 | 없음(부하 원인 해소) | slice Hz 정상 회복 + 새 주행 승인 |
 
 `STOP/ESTOP`처럼 두 등급 가능성이 있는 항목은 하드웨어 구성과 위험성 평가를 통해 하나로
 확정해야 한다.
@@ -1054,6 +1067,7 @@ systemd service, release versioning, `/robot/health` 기반 배포 검사, rollb
 8. rosbag에 camera/audio를 포함할 것인가?
 9. 장애 로그와 bag의 보존 기간 및 개인정보 정책은 무엇인가?
 10. systemd service를 Jetson 한 대에 둘지, 일부 기능을 별도 컴퓨터에 둘지?
+11. nvblox `static_map_slice` 저하(GPU 경합·포화로 느려짐·멈춤)를 `STOP`으로 볼지 `DEGRADED`로 볼지, 판정 임계(Hz/age)와 대응은 무엇인가? (§8.5, §9.1)
 
 ---
 

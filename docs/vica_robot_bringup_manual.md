@@ -35,6 +35,8 @@ ip -br link show can1          # 링크 상태
 ls -l /dev/rplidar             # LiDAR 심볼릭 링크
 docker ps --format '{{.Names}}\t{{.Status}}'
 ros2 node list                 # 이미 떠 있는 노드 확인
+nvpmodel -q                    # 전력모드 (MAXN=0 권장, §5 ⓪)
+sudo jetson_clocks --show      # 클럭 고정 여부
 ```
 
 음성·LLM까지 쓸 때는 다음도 확인한다.
@@ -256,6 +258,7 @@ cd ~/VICA-smarthandle/vica-voice-llm
 
 | # | 단계 | 위치 | 바퀴 회전 |
 | --- | --- | --- | --- |
+| ⓪ | 전력·클럭 모드 고정 | Host | - |
 | ① | CAN 링크 활성화 | Host | - |
 | ② | URDF·TF·RViz | Host | - |
 | ③ | LiDAR | Host | - |
@@ -272,6 +275,21 @@ cd ~/VICA-smarthandle/vica-voice-llm
 
 각 단계는 별도 터미널에서 계속 실행 상태로 둔다. ⑫⑬은 음성 없이 앱·CLI만 쓸 때는
 생략할 수 있다.
+
+### ⓪ 전력·클럭 모드 고정 (Host)
+
+GPU·CPU가 DVFS로 클럭을 내리면 nvblox depth 처리와 STT/TTS가 GPU를 시분할할 때 경합이
+악화된다. 주행 전 최대 성능 모드로 고정한다. 안전상 손해는 없다.
+
+```bash
+nvpmodel -q            # 현재 모드 확인 (모델별 번호 확인)
+sudo nvpmodel -m 0     # MAXN (최대 성능)
+sudo jetson_clocks     # 클럭 최대 고정
+sudo jetson_clocks --show   # 고정 확인
+```
+
+전력·발열 여유가 빠듯한 구성에서는 팀이 정한 전력모드 번호를 대신 쓴다. GPU 경합 실측은
+`scripts/measure_nvblox_stt_contention.sh`로 한다(Jetson 전용).
 
 ### ① CAN 링크 활성화 (Host)
 
