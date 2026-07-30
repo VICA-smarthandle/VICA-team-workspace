@@ -529,8 +529,11 @@ GPU 경합/포화 자체의 관측은 §8.7의 Jetson GPU util(tegrastats `GR3D_
 
 | 감지 항목 | 권장 반응 |
 |---|---|
+| **마이크 무입력 (조용한 실패)** | **아래 8.6.1 참조. 최우선 감지 항목** `[TARGET]` |
 | microphone open 상태 | 자동 reconnect |
 | 입력 audio age | 음성 대기 상태에서 데이터 단절 감지 |
+| 긴급 감시 실효 hop·창 건너뜀 | 카운터 신설 후 임계 초과 시 경고 `[TARGET]` |
+| STT/TTS CPU 폴백 여부 | 폴백 시 지연 3.7배·10배. 앱에 상태 표시 `[TARGET]` |
 | STT/LLM/TTS model load | 준비되지 않으면 DEGRADED |
 | STT latency | 연속 임계 초과 시 경고 |
 | LLM latency/timeout | 재시도 제한, 앱에 상태 표시 |
@@ -540,6 +543,42 @@ GPU 경합/포화 자체의 관측은 §8.7의 Jetson GPU util(tegrastats `GR3D_
 
 음성 기능 장애가 모터 안전 경로를 막으면 안 된다. 단, 음성 기반 긴급정지가 유일한 사용자
 정지 수단으로 승인된 구성이라면 필수 component 정책을 별도로 정의해야 한다.
+
+#### 8.6.1 마이크 무입력은 "조용한 실패"다 `[TARGET]`
+
+**이 항목은 기능 저하가 아니라 안전 결함이다.** 마이크나 긴급어 감시가 멈추면 사용자의 음성
+긴급정지 요청이 무시되는데, **아무 오류도 나타나지 않는다.** "조용하다"와 "안전하다"가 구별되지
+않는다.
+
+nvblox slice 저하(8.5절)와 같은 부류이지만 대체 수단이 더 적다.
+
+| | nvblox slice 저하 | 마이크 무입력 |
+|---|---|---|
+| 대체 수단 | LiDAR가 2D 장애물을 계속 커버 | 물리 E-stop 버튼뿐 |
+| 사용자 접근성 | — | **시각장애인이 버튼 위치를 찾아야 한다** |
+| 발현 방식 | 3D 장애물 회피 실패 | 긴급정지 요청이 무시됨 |
+
+스마트 핸들 활성 모드의 핸들 놓음 정지(`vica_scenario.md` 2-1.2절)가 추가 수단이지만 활성 모드
+한정이며 일시정지 계열이다. **비활성 모드에서는 물리 버튼과 음성뿐이다.**
+
+**관측 방법과 한계.** 이 신호는 어댑터로 관측할 수 없다. 오디오 콜백 내부 상태이고 카운터가
+아예 없다. `vica_system_monitor`의 어댑터는 토픽과 `/proc`으로 이미 나오는 것만 대신 발행할 수
+있으므로 **1차 범위에서 자동으로 빠진다.**
+
+따라서 `vica-voice-llm/src/emergency_monitor.py`에 다음을 추가해야 한다.
+
+```text
+오디오 콜백 호출 카운터
+    → 일정 시간 증가가 없으면 무입력으로 판정
+    → /diagnostics 발행 (level ERROR)
+    → aggregator → robot_health_monitor_node → 앱 표시
+```
+
+구현 규모는 작다(카운터 변수와 진단 발행 20~30줄 수준). 알고리즘·hop·window·모델은 건드리지
+않으므로 GPU 부하 프로파일이 그대로다.
+
+**등급은 19절 팀 확정 대상이다.** 음성 긴급정지를 필수 component로 볼지에 따라 DEGRADED와
+STOP이 갈린다. 8.6절 말미의 "유일한 사용자 정지 수단" 조건과 같은 판단이다.
 
 ### 8.7 Jetson과 운영체제
 
@@ -590,6 +629,7 @@ GPU 경합/포화 자체의 관측은 §8.7의 Jetson GPU util(tegrastats `GR3D_
 | 디스크 부족 | DEGRADED/FAULT | 녹화 중단, 경고 | 오래된 정책 로그 정리 검토 | 여유 공간 확보 |
 | GPU OOM | DEGRADED | 음성/비전 기능 중지 | 해당 process 재시작 | 자원 정상 |
 | nvblox slice stale (GPU 경합/포화) | STOP/DEGRADED `[TARGET]` | (팀 확정) costmap 신선도 경고, 필요 시 감속·정지 | 없음(부하 원인 해소) | slice Hz 정상 회복 + 새 주행 승인 |
+| **마이크 무입력 (음성 긴급정지 불가)** | STOP/DEGRADED `[TARGET]` | (팀 확정, §19-3·§19-12) 앱·TTS·LED로 즉시 알림. 물리 E-stop 위치 안내 | device reconnect | 오디오 입력 회복 + 새 주행 승인 |
 
 `STOP/ESTOP`처럼 두 등급 가능성이 있는 항목은 하드웨어 구성과 위험성 평가를 통해 하나로
 확정해야 한다.
@@ -955,6 +995,22 @@ CI build/test
 - hardware/communication/state/error 구분 가능
 - 사람이 읽는 message와 기계가 읽는 key-value 모두 존재
 
+**우선순위.** 이 단계의 항목들은 크기가 아니라 "조용한 실패인지"로 순서를 정한다. 밖에서
+토픽 주기만 봐도 잡히는 것(§17 3단계의 어댑터가 담당)은 뒤로 미루고, **노드 내부 상태라
+어댑터로 원리적으로 볼 수 없는 것을 먼저 넣는다.**
+
+| 순위 | 항목 | 대상 파일 | 근거 |
+|---|---|---|---|
+| 1 | **마이크 무입력 카운터** | `vica-voice-llm/src/emergency_monitor.py` | §8.6.1 안전 결함. 구현 20~30줄 |
+| 2 | 긴급 감시 실효 hop·창 건너뜀 | 같은 파일 | 카운터가 아예 없다 |
+| 3 | STT/TTS CPU 폴백 여부 | `vica-voice-llm/src/{stt,tts}.py` | `print`로만 나감. 지연 3.7배·10배 |
+| 4 | Smart Handle 상향 상태 | `vica_user_guidance` | 상향 프로토콜 신설이 선행 (`vica_scenario.md` 2-1.3절) |
+| 5 | safety·localization·encoder 진단 | 각 노드 | E-stop 경로 재검증을 요구하므로 마지막 |
+
+1~3번은 같은 저장소의 같은 파일 계열이므로 한 작업으로 묶는 것이 효율적이다.
+5번은 `safety_supervisor_node`·`emergency_stop_node`를 수정하므로 물리·앱·음성 E-stop과
+reset 경로를 전부 실기에서 다시 검증해야 한다.
+
 ### 2단계: 표준 진단 집계기를 추가한다
 
 `diagnostic_aggregator` 설정만 추가해 component별 tree를 만든다.
@@ -1068,6 +1124,15 @@ systemd service, release versioning, `/robot/health` 기반 배포 검사, rollb
 9. 장애 로그와 bag의 보존 기간 및 개인정보 정책은 무엇인가?
 10. systemd service를 Jetson 한 대에 둘지, 일부 기능을 별도 컴퓨터에 둘지?
 11. nvblox `static_map_slice` 저하(GPU 경합·포화로 느려짐·멈춤)를 `STOP`으로 볼지 `DEGRADED`로 볼지, 판정 임계(Hz/age)와 대응은 무엇인가? (§8.5, §9.1)
+11-1. slice 저하를 **감지**하는 것과 오래된 3D 장애물로 주행하는 것을 **막는** 것은 다르다.
+   방어가 필요하면 어느 경로로 할 것인가? `nvblox_layer` 플러그인에는 timeout 파라미터가 없고
+   `current_` 플래그를 고쳐도 Nav2가 그것으로 로봇을 멈추는지 `[미검증]`이다. 상위
+   로직(Mission 취소)이 담당해야 한다. 단 **nvblox 유령 장애물 진단이 끝난 뒤에 결정한다** —
+   지금 방어를 추가하면 원인 분리가 어려워진다
+   (`devlog/2026-07-30-nvblox-ghost-obstacle.md` §12)
+12. **마이크 무입력을 `STOP`으로 볼지 `DEGRADED`로 볼지?** (§8.6.1, §9.1) 이는 3번과 같은
+   판단이다. 음성 긴급정지가 시각장애인 사용자의 사실상 유일한 즉시 정지 수단이라면 STOP이
+   맞다. 대체 수단은 물리 E-stop 버튼(사용자가 위치를 찾아야 함)과 활성 모드 한정 핸들 놓음뿐이다
 
 ---
 
