@@ -672,9 +672,14 @@ E-stop과 성격이 다른 별도 경로다. 안전 사건이 아니라 목표 �
 
 Mission Manager는 `cancelTask()`로 `NavigateToPose` goal을 취소할 뿐 감속을 지시하지
 않는다. 취소되면 `controller_server`가 `/cmd_vel` 발행을 멈추고, 그 뒤를
-`velocity_smoother`가 `max_decel`(현재 `[-1.0, 0.0, -1.2]`) 기울기로 0까지 이어 붙여
+`velocity_smoother`가 `max_decel`(현재 `[-2.5, 0.0, -3.2]`) 기울기로 0까지 이어 붙여
 감속 램프를 만든다. 이 값은 도착·취소·controller 정지에 전역 적용되며 `[미검증]`
 트레이드오프로 남아 있어 실기에서 확정한다.
+
+`max_velocity`가 `[0.26, 0.0, 1.0]`이므로 이 감속률에서 정지까지 약 0.104초, 0.0135 m다.
+즉 감속 램프와 즉시 정지의 물리적 차이가 매우 작다. 사용자에게 "천천히 멈춘다"를 제공해야
+하는 상황에서는 감속률이 아니라 정지 전 유예 시간으로 설계한다
+(`vica_scenario.md` 2-1.2절).
 
 감속 램프도 명령이므로 Safety Supervisor의 freshness 판정에는 살아 있는 명령으로 보인다.
 따라서 `velocity_smoother.velocity_timeout`(0.4 s)은 `safety_supervisor_node`의
