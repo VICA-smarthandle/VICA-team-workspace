@@ -259,23 +259,36 @@ CAN 격리는 `docs/superpowers/specs/2026-07-27-motor-can-health-design.md` 6.2
 
 ## 12. 다음 세션 재개 지점 (2026-07-31 종료 시점)
 
-### 브랜치 상태
+### 브랜치 상태 — **push 완료**
 
-| 저장소 | 브랜치 | 원격 | 비고 |
-| --- | --- | --- | --- |
-| 최상위 | `docs/system-monitor` | **미푸시 2** | 다른 세션의 `d011d8e`(home-return devlog)가 같은 브랜치에 올라와 있다 |
-| `vica_ros2_ws` | `integration/app-ui-system-monitor` | **원격에 없음** | 커밋 7개. 체크아웃은 `feat/home-return`(다른 세션)이라 worktree로 접근한다 |
-| `VICA_Supervisor` | `integration/app-ui-system-monitor` | **미푸시 5** | |
-| `vica-voice-llm` | `dev` | 동기 | 이 작업 범위 아님 |
+| 저장소 | 작업 브랜치 | 원격 |
+| --- | --- | --- |
+| 최상위 | `docs/system-monitor` | 동기 (`312f83e`) |
+| `vica_ros2_ws` | `integration/app-ui-system-monitor` | 동기 (커밋 7개) |
+| `VICA_Supervisor` | `integration/app-ui-system-monitor` | 동기 (커밋 10개) |
+| `vica-voice-llm` | `dev` | 동기. 이 작업 범위 아님 |
 
 **세 저장소 모두 `dev`에 머지하지 않았다.** 실기 검증 전이다.
 
-`vica_ros2_ws`는 다른 세션이 `feat/home-return`을 체크아웃하고 있어 브랜치를 바꾸지
-않는다. 작업할 때는 worktree를 쓴다.
+세 브랜치가 원격에 있으므로 다른 장비에서 그대로 받는다.
 
 ```bash
-git -C vica_ros2_ws worktree add /tmp/wt-monitor integration/app-ui-system-monitor
+cd ~/VICA-smarthandle
+git fetch --all --prune
+git switch docs/system-monitor
+git -C vica_ros2_ws    fetch origin && git -C vica_ros2_ws    switch integration/app-ui-system-monitor
+git -C VICA_Supervisor fetch origin && git -C VICA_Supervisor switch integration/app-ui-system-monitor
 ```
+
+> **아래 체크아웃 관련 서술은 개발 노트북에만 해당한다.** 노트북에서는 다른 세션이
+> `vica_ros2_ws`를 `feat/home-return`으로 체크아웃하고 있어 브랜치를 바꾸지 않고
+> worktree를 썼다. **Jetson에는 그 제약이 없다면 그냥 `switch`한다.** 어느 쪽이든
+> 명령 전에 대상 저장소에서 `git status`를 직접 확인한다.
+>
+> ```bash
+> # 노트북처럼 다른 브랜치가 점유 중일 때만
+> git -C vica_ros2_ws worktree add /tmp/wt-monitor integration/app-ui-system-monitor
+> ```
 
 ### `feat/home-return`과의 호환성 — 확인 완료, 문제 없음
 
@@ -309,10 +322,39 @@ git -C vica_ros2_ws worktree add /tmp/wt-monitor integration/app-ui-system-monit
    nvblox slice 지연, Docker `/proc` 가시성.
 4. **`error_source` 기본값 `health` 전환** — 별도 커밋.
 
+### Jetson 첫 세션이 할 일 (순서대로)
+
+```bash
+# ① 코드 받기 — 위 브랜치 상태의 명령
+# ② 의존 설치 (최초 1회)
+sudo apt update && sudo apt install -y ros-humble-diagnostic-aggregator
+ros2 pkg prefix diagnostic_aggregator          # 경로가 나오면 성공
+
+# ③ 빌드·테스트 — ARM64에서 처음 도는 것이라 이 자체가 검증이다
+cd ~/VICA-smarthandle/vica_ros2_ws
+source /opt/ros/humble/setup.bash
+colcon build --packages-select vica_interfaces vica_system_monitor
+colcon test --packages-select vica_system_monitor
+colcon test-result --test-result-base build/vica_system_monitor
+#   기대: 188 tests, 0 errors, 0 failures, 1 skipped
+#   (skip 1건은 copyright 헤더 표준 skip이라 정상)
+
+# ④ 감시 노드 단독 기동 — 로봇 스택 없이 먼저
+source install/setup.bash
+ros2 launch vica_system_monitor system_monitor.launch.py
+#   다른 터미널: ros2 node list (3개) / ros2 topic echo /robot/health --once
+```
+
+노트북 기준값: 기동 후 15초까지 `state: 0`(STARTING)·결함 0건, 이후 grace 만료 순서대로
+결함이 올라온다(15s motor·safety·lidar → 20s perception → 30s localization → 45s navigation).
+
+**③에서 테스트가 하나라도 실패하면 거기서 멈춘다.** ARM64 고유 문제일 수 있어 원인을
+먼저 본다.
+
+④까지 통과하면 10절의 1차 측정으로 넘어간다.
+
 ### 미결 판단 사항
 
 - **Draft PR을 열 것인가.** 노트북 검증이 끝나 열어도 되는 상태다. 본문은
   `GOVERNANCE.md` 8절 항목(목적·범위, 영향 계약, Safety 영향, 수행/미수행 검증,
   문서 갱신, rollback)을 채운다. 아직 안 열었다.
-- **`vica_ros2_ws`의 integration 브랜치를 push할 것인가.** 원격에 아직 없다. Jetson으로
-  코드를 옮기려면 필요하다.
