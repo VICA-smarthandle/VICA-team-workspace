@@ -242,27 +242,36 @@ VICA-smarthandle/                         # 조정 작업공간 [CURRENT]
 │       ├── vica_interfaces/
 │       │   └── msg/
 │       │       ├── SafetyState.msg        # [TARGET]
-│       │       ├── RobotHealth.msg        # [TARGET]
-│       │       └── RobotEvent.msg         # [TARGET]
+│       │       ├── RobotFault.msg         # [CURRENT] 결함 하나, 아래 둘이 재사용
+│       │       ├── RobotHealth.msg        # [CURRENT]
+│       │       └── RobotEvent.msg         # [CURRENT]
 │       │
 │       ├── vica_user_guidance/            # [TARGET]
 │       │   ├── turn_guide_node
 │       │   └── user_guidance_driver_node
 │       │
-│       ├── vica_system_monitor/           # [TARGET] 신규 권장 패키지
+│       ├── vica_system_monitor/           # [CURRENT] 실기 [미검증]
 │       │   ├── config/
+│       │   │   ├── probes.yaml              # 감시 대상·기대 주기·구독 QoS
 │       │   │   ├── diagnostic_aggregator.yaml
 │       │   │   ├── required_components.yaml
-│       │   │   └── recovery_policy.yaml
+│       │   │   └── recovery_policy.yaml     # [TARGET] 11절, 미구현
 │       │   ├── launch/system_monitor.launch.py
 │       │   ├── vica_system_monitor/
 │       │   │   ├── robot_health_monitor_node.py
+│       │   │   ├── external_diagnostics_node.py   # 외부 대상 대행 어댑터
 │       │   │   ├── health_logic.py
-│       │   │   ├── recovery_policy.py
+│       │   │   ├── fault_catalog.py         # fault_code → 등급·문구·조치 정본
+│       │   │   ├── agg_parser.py            # /diagnostics_agg name → component
+│       │   │   ├── probe_config.py
+│       │   │   ├── process_cpu.py           # /proc/<pid>/stat CPU %
+│       │   │   ├── freshness.py             # STEADY_TIME 계약 사본
+│       │   │   ├── recovery_policy.py       # [TARGET] 미구현
 │       │   │   └── event_deduplicator.py
 │       │   └── test/
 │       │       ├── test_health_logic.py
-│       │       └── test_recovery_policy.py
+│       │       ├── test_config_contract.py  # 4파일 이름 집합 일치 강제
+│       │       └── test_recovery_policy.py  # [TARGET] 미구현
 │       │
 │       └── vica_bringup/                  # 통합 bringup 패키지 [TARGET]
 │           ├── launch/full_robot.launch.py
@@ -276,9 +285,20 @@ VICA-smarthandle/                         # 조정 작업공간 [CURRENT]
 │       └── ros_tts_node.py
 │
 └── VICA_Supervisor/                       # 앱 저장소 [CURRENT]
-    └── ros2/
-        └── vica_status_app_node.py
+    ├── ros2/
+    │   └── vica_status_app_node.py        # error_source 파라미터로 감쌈 [CURRENT]
+    └── lib/
+        ├── core/fault_severity.dart       # [CURRENT]
+        ├── models/robot_{fault,health,event}.dart  # [CURRENT]
+        ├── screens/system_diagnostics_screen.dart  # [CURRENT]
+        └── widgets/health_banner.dart     # [CURRENT]
 ```
+
+`vica_system_monitor`는 `robot_health_monitor_node` 하나만 두려던 초안과 달리 노드가
+**2개**다. `external_diagnostics_node`를 분리한 이유는 4.1절이 아니라 실무 제약이다 —
+`rplidar_ros`·nvblox·D455는 외부 패키지라 `/diagnostics`를 내지 않고 코드를 고칠 수도
+없으므로 누군가 대신 발행해야 한다. 이것을 모니터 안에 넣으면 `nvblox_msgs` 같은 외부
+타입 의존이 모니터로 들어와 symlink 하나가 빠져도 감시 전체가 기동 실패한다.
 
 ### 5.1 새 패키지를 분리하는 이유
 
@@ -300,10 +320,11 @@ VICA-smarthandle/                         # 조정 작업공간 [CURRENT]
 
 ### 6.1 추가되는 실행 노드
 
-| 노드 | 종류 | 역할 |
-|---|---|---|
-| `diagnostic_aggregator` | ROS 2 표준 노드 | 여러 `/diagnostics`를 component별로 집계 |
-| `robot_health_monitor_node` | VICA 신규 노드 | 준비 상태, fault, 복구 정책, 이벤트 관리 |
+| 노드 | 종류 | 역할 | 상태 |
+|---|---|---|---|
+| `diagnostic_aggregator` | ROS 2 표준 노드 | 여러 `/diagnostics`를 component별로 집계 | `[CURRENT]` 설정만, apt 설치 필요 |
+| `robot_health_monitor_node` | VICA 신규 노드 | 준비 상태, fault, 이벤트 관리 | `[CURRENT]`, 복구 정책은 `[TARGET]` |
+| `external_diagnostics_node` | VICA 신규 노드 | 외부 대상(LiDAR·nvblox·D455)과 프로세스 CPU를 대신 진단 발행 | `[CURRENT]` |
 
 기존 노드에 진단을 추가하는 것은 새 프로세스를 만드는 것이 아니다. 각 노드 내부에서
 `diagnostic_updater`를 사용해 상태를 발행하므로 node 수가 늘어나지 않는다.
@@ -352,7 +373,8 @@ SafetyState
 
 ### 7.2 `RobotHealth`
 
-전체 시스템을 한 번에 이해할 수 있는 `[TARGET]` 요약 상태다.
+전체 시스템을 한 번에 이해할 수 있는 요약 상태다. **확정 필드 목록의 정본은
+`vica_architecture.md` 4.1절**이며 아래는 초안 시점의 형태와 실제 구현의 차이를 남긴다.
 
 ```text
 RobotHealth
@@ -376,6 +398,19 @@ RobotHealth
 └── stamp
 ```
 
+실제 구현이 초안과 다른 점 3가지:
+
+1. **`*_ready` bool → `*_readiness` 3상태**(`UNKNOWN`/`NOT_READY`/`READY`). bool은 "관측
+   수단이 없다"를 표현할 수 없어 `false`로 떨어뜨리면 정상인데 고장으로 보이고 `true`로
+   올리면 관측하지 못한 것을 정상으로 보고한다. Smart Handle이 정확히 이 경우다 — 상향
+   통신 경로가 없어 서보·LED·햅틱 실동작을 확인할 방법이 없다. 8.3절과
+   `SmartHandleState.msg`가 경고하는 실패 모드를 bool로는 막을 수 없다.
+2. **`lidar`·`perception` readiness 추가.** 초안 목록에 센서 컴포넌트가 없었다.
+3. **`RobotFault[] active_faults` 배열 추가.** `primary_fault_code` 하나만으로는 앱이
+   재접속했을 때 나머지 결함을 복원할 수 없다.
+
+`stamp` 대신 `std_msgs/Header`를 쓴다.
+
 `READY`는 단순히 모든 노드가 실행 중이라는 뜻이 아니다.
 
 ```text
@@ -393,7 +428,7 @@ AND 필수 topic과 TF가 정해진 시간 안에 갱신됨
 
 ### 7.3 `RobotEvent`
 
-상태 변화, 장애 발생, 복구 시도와 결과를 전달하는 `[TARGET]` 메시지다.
+상태 변화와 장애 발생을 전달한다. 복구 시도·결과 전달은 11절과 함께 `[TARGET]`으로 남는다.
 
 ```text
 RobotEvent
@@ -410,18 +445,41 @@ RobotEvent
 └── stamp
 ```
 
+실제 구현이 초안과 다른 점 3가지:
+
+1. **결함 필드를 `RobotFault` 하나로 묶었다.** `RobotHealth.active_faults`와 필드가 완전히
+   같아 평면으로 두면 같은 정의가 두 메시지에 중복된다.
+2. **`event_id`를 두지 않는다.** 중복 판정 키는 `component`+`fault_code`로 충분하고 목록
+   표시용 고유 id는 앱이 `_uuid.v4()`로 만든다. 로봇이 발급하면 앱 재시작·재접속 시
+   중복 판정이 로봇 상태에 묶인다.
+3. **`transition`(RAISED/ESCALATED/REMINDER/CLEARED)을 추가했다.** 초안에는 전이 종류를
+   담을 필드가 없어 앱이 `active` 변화를 추측해야 했다.
+
+**한국어 문구 정본은 로봇 쪽 `fault_catalog.py`**에 둔다. 앱은 `detail`·`suggested_action`을
+표시만 하므로 fault를 추가할 때 앱을 다시 배포하지 않는다. 초안은 문구 소유자를 정하지
+않았다.
+
 ### 7.4 권장 Topic
 
 | Topic | 발행자 | 구독자 | 목적 |
 |---|---|---|---|
-| `/diagnostics` | 모든 진단 대상 노드 | aggregator | 표준 개별 진단 `[TARGET]` |
-| `/diagnostics_agg` | aggregator | health monitor, 개발 도구 | 계층형 진단 `[TARGET]` |
-| `/safety_state` | Safety Supervisor | 앱, health monitor, guidance | 즉시 안전 상태 `[CURRENT]`, 신규 consumer는 `[TARGET]` |
-| `/robot/health` | health monitor | 앱, Mission, 배포 검사 | 전체 준비·운영 상태 `[TARGET]` |
-| `/robot/events` | health monitor | 앱, TTS, logger | 상태 변화와 fault 이벤트 `[TARGET]` |
+| `/diagnostics` | motor node, `external_diagnostics_node`, health monitor | aggregator | 표준 개별 진단 `[CURRENT]`, 발행자 확대는 17절 1단계 |
+| `/diagnostics_agg` | aggregator | health monitor, 개발 도구 | 계층형 진단 `[CURRENT]`, 실기 `[미검증]` |
+| `/safety_state` | Safety Supervisor | 앱, health monitor, guidance | 즉시 안전 상태 `[CURRENT]`, guidance consumer는 `[TARGET]` |
+| `/robot/health` | health monitor | 앱, Mission, 배포 검사 | 전체 준비·운영 상태 `[CURRENT]`, Mission·배포 consumer는 `[TARGET]` |
+| `/robot/events` | health monitor | 앱, TTS, logger | 상태 변화와 fault 이벤트 `[CURRENT]`, TTS consumer는 `[TARGET]` |
 | `/cmd_vel_safe` | Safety Supervisor | motor adapter | 최종 안전 속도 `[CURRENT]` |
 | `/smart_handle/state` | guidance driver | Safety Supervisor, health monitor | 연결·접촉·입력 상태 `[TARGET]` |
 | `/user_guidance/turn` | turn guide | guidance driver | 좌·우 방향 안내 `[TARGET]` |
+
+**앱 재접속 복원을 `transient_local`에 의존하지 않는다.** `/robot/health`는 latched로
+발행하지만 Humble rosbridge의 `subscribe` op는 durability를 지정하지 않아 volatile로 붙고
+latched 샘플을 못 받을 수 있다. 그래서 **1 Hz 상시 발행 + `active_faults` 전체 스냅샷**으로
+복원한다. 앱이 이미 `/app_estop_state`에 쓰는 주기 브로드캐스트와 같은 패턴이다.
+
+`external_diagnostics_node`와 `robot_health_monitor_node`는 자기 자신의 `/diagnostics`도
+낸다. 그래서 서로를 감시한다 — 어댑터가 죽으면 aggregator가 `expected` 미충족으로 Stale을
+띄우고, aggregator가 죽으면 모니터가 `/diagnostics_agg` stale을 결함으로 띄운다.
 
 ---
 
@@ -1011,9 +1069,10 @@ CI build/test
 5번은 `safety_supervisor_node`·`emergency_stop_node`를 수정하므로 물리·앱·음성 E-stop과
 reset 경로를 전부 실기에서 다시 검증해야 한다.
 
-### 2단계: 표준 진단 집계기를 추가한다
+### 2단계: 표준 진단 집계기를 추가한다 — `[CURRENT]` 설정 완료, 실기 `[미검증]`
 
 `diagnostic_aggregator` 설정만 추가해 component별 tree를 만든다.
+`vica_system_monitor/config/diagnostic_aggregator.yaml`이 이 tree를 구현한다.
 
 ```text
 VICA
@@ -1031,7 +1090,18 @@ VICA
 └── Computer
 ```
 
-### 3단계: Health Monitor 한 개를 추가한다
+**착수 사전 조건.** `diagnostic_aggregator`는 apt 패키지이며 현재 노트북·Jetson 둘 다
+미설치다. 한쪽만 설치하면 launch가 갈라진다.
+
+```bash
+sudo apt install -y ros-humble-diagnostic-aggregator
+```
+
+`system_monitor.launch.py`의 `enable_aggregator:=false`로 aggregator 없이 `/diagnostics`를
+직접 붙여 단독 디버깅할 수 있다. 이때 Stale 판정 주체가 aggregator에서 모니터로 옮겨가므로
+운영 구성으로 쓰지 않는다.
+
+### 3단계: Health Monitor를 추가한다 — `[CURRENT]` 코드 완료, 실기 `[미검증]`
 
 초기 역할은 다음으로 제한한다.
 
@@ -1041,13 +1111,24 @@ VICA
 - `/robot/health`, `/robot/events` 발행
 - 중복 알림 억제
 
-### 4단계: 기존 출력 경로를 연결한다
+초안과 달리 노드가 2개가 되었다(6.1절). 외부 패키지를 대신해 진단을 발행할 주체가
+필요했고, 그 외부 타입 의존을 모니터에서 격리해야 했다.
+
+**모든 임계값은 실측 전까지 `[미검증]`이다.** 구독 QoS, 기대 주기, CPU 임계를 지금 확정하면
+최적화 이후 오탐이 나거나 반대로 회귀를 못 잡는다. `/imu/base_link` 400 Hz → 60 Hz
+다운샘플, `publish_voxel_map: False`, `imu_base_link_adapter` CPU 38.6 % 개선이 모두
+예정되어 있다. 실측 순서는 18.3절과 `devlog/2026-07-30.md`를 따른다.
+
+### 4단계: 기존 출력 경로를 연결한다 — 앱은 `[CURRENT]`, 나머지 `[TARGET]`
 
 새로운 알림 노드를 추가하지 않고 기존 구성요소를 재사용한다.
 
-- `vica_status_app_node`: `/robot/health`, `/robot/events`
-- TTS: 중요 event만 수신
-- `user_guidance_driver_node`: `/safety_state` 직접 수신, 일반 event 선택 수신
+- `vica_status_app_node`: `/robot/health` — `error_source` 파라미터로 감쌌다. 기본값
+  `diagnostics`가 현재 동작이므로 빌드해도 거동이 바뀌지 않는다. 실기 A/B 뒤 기본값을
+  `health`로 바꾸는 것은 별도 커밋 `[TARGET]`
+- Flutter 앱: `/robot/health`·`/robot/events`를 rosbridge로 직접 구독 `[CURRENT]`
+- TTS: 중요 event만 수신 `[TARGET]`
+- `user_guidance_driver_node`: `/safety_state` 직접 수신, 일반 event 선택 수신 `[TARGET]`
 
 ### 5단계: 제한적 자동 복구를 추가한다
 

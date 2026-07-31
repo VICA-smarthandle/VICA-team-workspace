@@ -218,8 +218,9 @@ VICA_STT_COMPUTE=float16
 
 ### 4.6 공용 메시지 빌드
 
-음성 노드가 쓰는 `VicaIntent`, `RobotState`, `EmergencyEvent`의 정본은
-`vica_ros2_ws/src/vica_interfaces/`다. 저장소 내부 사본은 두지 않는다.
+음성 노드가 쓰는 `VicaIntent`, `RobotState`, `EmergencyEvent`와 상태 감시가 쓰는
+`RobotFault`, `RobotHealth`, `RobotEvent`의 정본은 `vica_ros2_ws/src/vica_interfaces/`다.
+저장소 내부 사본은 두지 않는다.
 
 ```bash
 cd ~/VICA-smarthandle/vica_ros2_ws
@@ -254,6 +255,25 @@ cd ~/VICA-smarthandle/vica-voice-llm
 .venv/bin/python -m src.main
 ```
 
+### 4.9 상태 감시 패키지 (최초 1회)
+
+`vica_system_monitor`는 ROS 2 표준 `diagnostic_aggregator`를 쓴다. apt 패키지이며 현재
+**노트북·Jetson 둘 다 미설치**다. 한쪽에만 설치하면 launch가 갈라지므로 두 장비에서
+같이 설치한다.
+
+```bash
+sudo apt install -y ros-humble-diagnostic-aggregator
+```
+
+설치 여부는 다음으로 확인한다.
+
+```bash
+ros2 pkg prefix diagnostic_aggregator
+```
+
+어댑터가 쓰는 `ros-humble-diagnostic-updater`(4.0.6)와 `ros-humble-diagnostic-msgs`(4.9.1)는
+이미 설치되어 있다. Jetson에서도 같이 확인한다.
+
 ## 5. 실행 순서
 
 | # | 단계 | 위치 | 바퀴 회전 |
@@ -270,11 +290,12 @@ cd ~/VICA-smarthandle/vica-voice-llm
 | ⑨ | Nav2 + EKF + encoder | Host | **가능** |
 | ⑩ | Mission Manager | Host | **가능** |
 | ⑪ | Supervisor 앱 브리지 | Host | - |
+| ⑪-1 | 시스템 상태 감시 | Host | - |
 | ⑫ | 음성·LLM (LLM·TTS·긴급어 감시) | Host | **가능**(음성 요청 시) |
 | ⑬ | STT push-to-talk | Host | **가능**(음성 요청 시) |
 
 각 단계는 별도 터미널에서 계속 실행 상태로 둔다. ⑫⑬은 음성 없이 앱·CLI만 쓸 때는
-생략할 수 있다.
+생략할 수 있다. ⑪-1도 선택 항목이며, 띄우지 않아도 주행·안전 경로는 그대로 동작한다.
 
 ### ⓪ 전력·클럭 모드 고정 (Host)
 
@@ -407,6 +428,33 @@ ros2 launch vica_nav2 nav2_map_test.launch.py \
 
 encoder를 이미 별도로 띄웠다면 `start_encoder:=false`로 넘긴다.
 
+### ⑨-1 위치 자동 초기화 (Host) `[미검증]`
+
+```bash
+ros2 launch vica_localization pose_bootstrap.launch.py map_id:=vica_map_0630
+```
+
+기동 시 AMCL 초기 pose를 `home.yaml`의 홈 좌표로 자동 설정하고 검증한다.
+지금까지 RViz "2D Pose Estimate" 수동 조작에 의존하던 단계를 대신한다.
+
+성공하면 `/vica/localization_status`에 `state: ready`를 발행하고 종료한다.
+**Mission Manager는 이것을 받아야 주행을 승인한다.**
+
+```bash
+ros2 topic echo /vica/localization_status --once
+```
+
+> **`home.yaml`이 없으면 이 단계를 건너뛴다.** 그 경우 ⑩에서
+> `require_localization_ready:=false`를 넘기고, 초기 pose는 종전대로 RViz에서 지정한다.
+> 넘기지 않으면 주행이 승인되지 않는다.
+
+> **검증에 실패하면 그 자리에서 멈춘다.** 자동으로 전역 재추정을 걸지 않는다 —
+> 위치를 모르는 채로 자율 주행하는 것이 더 위험하기 때문이다. 로봇 위치를 확인하고
+> 다시 실행하거나, RViz로 수동 지정 후 `require_localization_ready:=false`로 운용한다.
+
+임계값은 전부 `[미검증]`이다. 실기 튜닝 전에는 **로봇을 일부러 2 m 어긋난 곳에 두고
+검증이 실패하는지** 먼저 확인한다. 통과해 버리면 임계값이 너무 느슨한 것이다.
+
 ### ⑩ Mission Manager (Host)
 
 ```bash
@@ -425,6 +473,18 @@ ros2 launch vica_mission_manager mission_manager.launch.py \
 - `/vica/robot_state` 1 Hz 발행(층·건물·이동 상태)
 - 확정 안내 문구를 `/vica/tts_request`로 발행
 
+`[미검증]` 홈 복귀 관련 인자는 다음과 같다.
+
+| 인자 | 기본값 | 뜻 |
+| --- | --- | --- |
+| `require_localization_ready` | `true` | ⑨-1의 검증을 요구한다. `false`면 위치 검증 없이 주행을 승인한다 |
+| `home_yaml` | `<storage_root>/<map_id>/home.yaml` | 없으면 자동 복귀만 꺼지고 안내는 정상 동작한다 |
+| `return_home_delay_sec` | `60.0` | 도착 후 이 시간이 지나면 홈으로 복귀한다 |
+| `return_home_warn_sec` | `5.0` | 복귀 몇 초 전에 음성으로 예고한다 |
+
+복귀 중 사용자가 새 목적지를 말하면 복귀를 취소하고 그쪽으로 간다(선점).
+E-stop이 걸리면 복귀 goal을 취소하며, **해제 후에도 스스로 다시 출발하지 않는다.**
+
 ⑫와 `map_id`가 다르면 서로 다른 목적지 catalog를 보게 되므로 반드시 같은 값을 쓴다.
 
 ### ⑪ Supervisor 앱 브리지 (Host)
@@ -439,6 +499,40 @@ Status App Node를 함께 실행한다. `map_yaml`은 선택 항목이며 비우
 자동 감지한다.
 
 이 파일은 아직 앱 저장소에 있는 `[CURRENT]` 위치다. ROS 패키지로의 이동은 `[TARGET]`이다.
+
+### ⑪-1 시스템 상태 감시 (Host)
+
+`⑤ motor`부터 `⑪`까지 감시 대상이 모두 떠 있어야 의미가 있으므로 이 위치에서 띄운다.
+먼저 띄우면 아직 뜨지 않은 노드가 전부 결함으로 잡힌다. 기동 유예(startup grace)가
+있지만 bringup 전체를 덮을 만큼 길지 않다.
+
+```bash
+ros2 launch vica_system_monitor system_monitor.launch.py
+```
+
+`external_diagnostics_node`, `diagnostic_aggregator`, `robot_health_monitor_node` 세 개를
+띄운다. §4.9의 apt 설치가 안 되어 있으면 aggregator에서 기동 실패한다.
+
+| launch 인자 | 기본값 | 뜻 |
+| --- | --- | --- |
+| `enable_aggregator` | `true` | `false`면 aggregator 없이 모니터가 `/diagnostics`를 직접 구독한다. 단독 디버깅용이며 Stale 판정 주체가 바뀌므로 운영에 쓰지 않는다 |
+
+읽기 전용 확인:
+
+```bash
+ros2 topic echo /robot/health --once      # 1 Hz 상시 발행
+ros2 topic hz /robot/health
+ros2 run rqt_robot_monitor rqt_robot_monitor   # /VICA/Hardware/* 트리
+```
+
+**이 노드는 모터를 세우지 않는다.** 관측과 보고만 한다. 감시 노드가 죽어도
+`/cmd_vel_req → Safety → /cmd_vel_safe → CAN` 경로는 그대로 동작해야 하며, 그것이 실기
+승인 기준이다.
+
+**현재 모든 임계값은 `[미검증]`이다.** 구독 QoS·기대 주기·CPU 임계를 Jetson에서 실측해
+확정하기 전까지 이 노드의 결함 표시를 판정 근거로 쓰지 않는다. 특히 `/scan`처럼
+QoS가 맞지 않으면 한 건도 못 받아 **영구 오탐**이 난다. 실측 절차는
+`guideline/vica_system_health_monitoring_draft.md` 18.3절을 따른다.
 
 ### ⑫ 음성·LLM (Host)
 
@@ -605,7 +699,7 @@ ros2 service call /safety_reset std_srvs/srv/Trigger "{}"
 기동의 역순으로 내린다.
 
 1. ⑬ → ⑫ 음성 노드 `Ctrl+C`
-2. ⑪ → ⑩ → ⑨ 순으로 각 터미널에서 `Ctrl+C`
+2. ⑪-1 → ⑪ → ⑩ → ⑨ 순으로 각 터미널에서 `Ctrl+C`
 3. ⑧ → ⑥ Docker 프로세스 종료
 4. ⑤ motor, ④ Safety, ③ LiDAR, ② TF 종료
 5. CAN 링크 정리
@@ -629,6 +723,9 @@ motor를 Safety보다 먼저 내려야 승인되지 않은 명령이 남지 않�
 | `/odom`이 튀거나 TF 경고 | `wheel_ekf`를 ⑨와 중복 실행 | 중복 프로세스 종료 후 ⑨만 유지 |
 | 앱이 연결 timeout | Jetson DHCP IP 변경 vs 앱 저장 IP 불일치 | `ip -br addr` 확인 후 앱 접속 주소 갱신 |
 | 2D Goal에 `/cmd_vel_req`가 없음 | Nav2 미기동 또는 remap 누락 | ⑨ 로그와 `ros2 topic info /cmd_vel_req` 확인 |
+| 모든 목적지 요청이 `localization_not_ready`로 거부 | ⑨-1을 띄우지 않았거나 검증 실패 | `ros2 topic echo /vica/localization_status --once`. `home.yaml`이 없으면 ⑩에 `require_localization_ready:=false` |
+| 도착 후 로봇이 혼자 떠남 | 자동 복귀 동작 중 | 정상이다. 시간을 늘리려면 ⑩의 `return_home_delay_sec` 조정 |
+| 도착해도 복귀하지 않음 | `home.yaml` 미설정·로드 실패, 또는 TF 조회 실패 | ⑩ 시작 로그의 홈 로드 메시지 확인. `map → base_footprint` TF 확인 |
 
 음성·LLM:
 
@@ -646,6 +743,17 @@ motor를 Safety보다 먼저 내려야 승인되지 않은 명령이 남지 않�
 | `/vica/intent`는 오는데 주행하지 않음 | gate 실패 | Mission Manager 로그의 실패 사유(§6 표) 확인 |
 | 로봇 음성에 긴급어 감시가 반응 | 자가 오탐 | `/vica/tts_state` 발행 확인, `emergency_monitor.py`의 `max_mute_sec` 조정 |
 | 요청은 오는데 소리가 없음 | 오디오 출력 장치 문제 | TTS 노드 로그의 `재생 실패`와 `aplay -l` 확인 |
+
+상태 감시(⑪-1):
+
+| 증상 | 원인 | 조치 |
+| --- | --- | --- |
+| `aggregator_node` executable을 못 찾음 | §4.9 apt 미설치 | `sudo apt install -y ros-humble-diagnostic-aggregator` |
+| 센서는 정상인데 `*_STALE`이 계속 뜸 | 구독 QoS 비호환. 감시 도구가 스스로 만든 오탐 | `ros2 topic info -v <topic>`의 발행 QoS를 읽고 `probes.yaml`의 값을 맞춘다. 어댑터 진단 message가 "구독자 붙음 + 0건"을 구분해 표시한다 |
+| nvblox slice 프로브가 통째로 빠짐 | `nvblox_msgs` import 실패(symlink 누락) | optional import라 감시는 계속 뜬다. `install/`의 symlink 확인 후 재빌드 |
+| Docker 프로세스 CPU가 안 잡힘 | PID namespace 분리로 host `/proc`에서 안 보임 | 해당 프로브를 미구성으로 둔다. 등급은 WARN 상한이라 주행을 막지 않는다 |
+| 앱에 결함이 안 보임 | 앱 화면은 `/robot/health`를 직접 구독한다 | rosbridge 연결과 `ros2 topic hz /robot/health` 확인. `/robot_status`의 `error_reason`은 별도 경로다 |
+| 부품 상태가 "관측 불가" | 정상이다. 고장이 아니라 확인할 수단이 없다는 뜻 | Smart Handle·음성·앱은 상향 관측 경로가 없다. `guideline/vica_architecture.md` 13.3절 |
 
 ## 11. 하지 말 것
 

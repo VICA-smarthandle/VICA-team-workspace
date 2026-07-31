@@ -45,6 +45,23 @@ VICA 개발 중 사용하는 Nav2, ROS 2, NVIDIA Jetson 및 Isaac ROS 공식 문
 | --- | --- | --- |
 | ROS 2 Clock and Time 설계 | `SystemTime`, `ROSTime`, `SteadyTime` 구분과 하드웨어 timeout 적용 기준 | <https://design.ros2.org/articles/clock_and_time.html> |
 | Python `time.monotonic()` | 시스템 시각 변경의 영향을 받지 않는 경과시간·timeout 계산 | <https://docs.python.org/3/library/time.html#time.monotonic> |
+| Python `/proc/[pid]/stat` | 프로세스 CPU % 계산의 `utime`·`stime` 필드 정의 | <https://man7.org/linux/man-pages/man5/proc_pid_stat.5.html> |
+
+### 진단과 상태 감시
+
+`vica_system_monitor`가 쓰는 표준 체인이다. Humble branch를 기준으로 본다.
+
+| 문서 | 용도 | URL |
+| --- | --- | --- |
+| `diagnostic_msgs` 개요 | `DiagnosticArray`·`DiagnosticStatus`·`KeyValue` 계약 | <https://docs.ros.org/en/humble/p/diagnostic_msgs/> |
+| `diagnostic_updater` Humble 소스 | `Updater`, `HeaderlessTopicDiagnostic`, `FrequencyStatusParam` 사용법 | <https://github.com/ros/diagnostics/tree/ros2-humble/diagnostic_updater> |
+| `diagnostic_aggregator` Humble 소스 | analyzer 설정 문법, `timeout`·`expected`, 계층 name 생성 규칙 | <https://github.com/ros/diagnostics/tree/ros2-humble/diagnostic_aggregator> |
+| `diagnostics` 저장소 README | 패키지 구성과 Humble 지원 범위 | <https://github.com/ros/diagnostics> |
+| `rqt_robot_monitor` | `/diagnostics_agg` 트리를 사람이 확인하는 도구 | <https://github.com/ros-visualization/rqt_robot_monitor> |
+| ROS 2 Lifecycle | Nav2 노드의 `GetState` 폴링 근거 | <https://design.ros2.org/articles/node_lifecycle.html> |
+
+`diagnostic_aggregator`는 apt 패키지(`ros-humble-diagnostic-aggregator`)로 설치하며 현재
+노트북·Jetson 둘 다 미설치다. 설치 절차는 `docs/vica_robot_bringup_manual.md` §4.9다.
 
 ### TF, URDF, launch와 데이터 기록
 
