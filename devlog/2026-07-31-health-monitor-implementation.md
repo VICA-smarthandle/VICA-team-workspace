@@ -256,3 +256,63 @@ CAN 격리는 `docs/superpowers/specs/2026-07-27-motor-can-health-design.md` 6.2
   `safety_supervisor_node` 수정은 E-stop 경로 전체 재검증을 요구하므로 마지막
 - GPU·온도·디스크(초안 8.7의 `diagnostic_common_diagnostics`, 미설치), rosbag2 snapshot,
   Mission start gate, systemd
+
+## 12. 다음 세션 재개 지점 (2026-07-31 종료 시점)
+
+### 브랜치 상태
+
+| 저장소 | 브랜치 | 원격 | 비고 |
+| --- | --- | --- | --- |
+| 최상위 | `docs/system-monitor` | **미푸시 2** | 다른 세션의 `d011d8e`(home-return devlog)가 같은 브랜치에 올라와 있다 |
+| `vica_ros2_ws` | `integration/app-ui-system-monitor` | **원격에 없음** | 커밋 7개. 체크아웃은 `feat/home-return`(다른 세션)이라 worktree로 접근한다 |
+| `VICA_Supervisor` | `integration/app-ui-system-monitor` | **미푸시 5** | |
+| `vica-voice-llm` | `dev` | 동기 | 이 작업 범위 아님 |
+
+**세 저장소 모두 `dev`에 머지하지 않았다.** 실기 검증 전이다.
+
+`vica_ros2_ws`는 다른 세션이 `feat/home-return`을 체크아웃하고 있어 브랜치를 바꾸지
+않는다. 작업할 때는 worktree를 쓴다.
+
+```bash
+git -C vica_ros2_ws worktree add /tmp/wt-monitor integration/app-ui-system-monitor
+```
+
+### `feat/home-return`과의 호환성 — 확인 완료, 문제 없음
+
+`faed36a`에서 갈라졌고 이후 계약 변경(`22eac98`, `472e104`)이 있었지만:
+
+- 변경 파일이 전혀 겹치지 않는다(`vica_localization`·`vica_mission_manager`만 건드림)
+- `SEVERITY_*`·`RobotFault/Health/Event` 참조가 없다
+- 실제 머지 시험: 충돌 0건, 빌드 성공, **테스트 365건 통과**
+
+충돌 없음만으로 판단하지 않고 합친 상태를 빌드·테스트했다 — git이 조용히 합쳐도 한쪽이
+지운 심볼을 다른 쪽이 쓰면 런타임에 깨지기 때문이다.
+
+**단, 그 세션이 앞으로 상태 감시와 연동하는 코드를 쓰면(예: 홈 복귀 실패를
+`/robot/events`로 알리기) 구버전 계약을 참조하게 된다. 그때 다시 확인한다.**
+
+### 노트북에서 끝낸 것
+
+0단계 `ros-humble-diagnostic-aggregator` 설치(노트북만), 1~7단계 전부, 그리고 계획에
+없던 실행 검증까지. **계획서가 "Jetson 2차"로 미뤄둔 fault injection 대부분이 실은
+가짜 발행자로 노트북에서 가능했다.** 실제로 그렇게 해서 결함 4건을 젯슨 가기 전에 잡았다.
+
+### 남은 것 — 전부 Jetson
+
+착수 전 **Jetson에도** `sudo apt install -y ros-humble-diagnostic-aggregator`.
+
+1. **1차 측정(바퀴 안 굴림)** — 10절 표. 특히 imu adapter CPU 38.6 %와 EKF 실효 Hz는
+   최적화 작업의 **유일한 before**다. 측정 후 이 devlog 10절에 값을 적는다.
+2. **`probes.yaml` 임계값 확정** — 지금 전부 `[미검증]`이다. 확정 전까지 이 노드의 결함
+   표시를 판정 근거로 쓰지 않는다.
+3. **2차 fault injection** — 노트북에서 못 한 것만: 실제 QoS 비호환, CAN 단절,
+   nvblox slice 지연, Docker `/proc` 가시성.
+4. **`error_source` 기본값 `health` 전환** — 별도 커밋.
+
+### 미결 판단 사항
+
+- **Draft PR을 열 것인가.** 노트북 검증이 끝나 열어도 되는 상태다. 본문은
+  `GOVERNANCE.md` 8절 항목(목적·범위, 영향 계약, Safety 영향, 수행/미수행 검증,
+  문서 갱신, rollback)을 채운다. 아직 안 열었다.
+- **`vica_ros2_ws`의 integration 브랜치를 push할 것인가.** 원격에 아직 없다. Jetson으로
+  코드를 옮기려면 필요하다.
