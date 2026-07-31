@@ -1,8 +1,8 @@
 # 2026-07-31 — 상태 감시 계층 구현
 
 앱에 "무엇이 / 어느 부품에서 / 얼마나 심각하게 / 언제부터 / 몇 번 / 무엇을 해야 하는지"를
-띄우기 위해 `vica_system_monitor` 패키지를 새로 만들고 앱까지 연결했다. **노트북 단위
-검증만 끝났고 실기 검증은 전혀 하지 않았다. dev에 머지하지 않는다.**
+띄우기 위해 `vica_system_monitor` 패키지를 새로 만들고 앱까지 연결했다. **노트북에서 할 수 있는 검증은 전부 끝냈고
+실기(Jetson) 검증은 아직 하지 않았다. dev에 머지하지 않는다.**
 
 ## 1. 왜 만들었나
 
@@ -127,29 +127,91 @@ self.declare_parameter('error_source', 'diagnostics')   # 'diagnostics' | 'healt
   스타일이다. `--add-ignore D213`으로 맞췄다. 같은 문제가 `mdrobot_can_control`에도 있으나
   범위 밖이라 손대지 않았다.
 
+## 8-1. 실행 검증에서 나온 결함 4건 (모두 수정)
+
+노트북 실기동에서 순수 로직 테스트가 원리적으로 잡을 수 없는 결함이 드러났다.
+
+| # | 결함 | 원인 |
+| --- | --- | --- |
+| 1 | 기동 유예가 aggregator 경로에서 무력화 | aggregator가 "Missing"을 1 Hz로 계속 발행해 입력이 항상 신선했다. `not fresh` 조건을 쓰던 유예 분기에 도달조차 못 했다. grace 15~45초인 컴포넌트가 기동 1.3초에 전부 결함으로 떴다 |
+| 2 | 영문 요약어 누출 | `detail: Missing`·`Error`·`Stale`이 관리자 화면에 그대로 떴다 |
+| 3 | E-stop 없는 `ESTOPPED` | 모터 진단이 없다는 이유로 앱에 "비상 정지"가 표시됐다 |
+| 4 | 알림 폭주 | `severity >= ESTOP`으로 폭주 억제를 풀어, 모터 진단 미수신이 초당 한 건씩 알림을 냈다(occurrence_count 223회) |
+
+유예 판정 기준을 신선도에서 **`ever_ok`**(한 번이라도 정상이었나)로 바꿨다. 한 번 정상이었다가
+고장 난 것은 유예 안이라도 즉시 보고한다 — 유예의 목적은 "아직 안 뜬 것"을 봐주는 것이지
+"떴다가 죽은 것"을 감추는 게 아니다.
+
+3·4번의 뿌리는 같다. **`severity`가 두 질문에 답하고 있었다.**
+
+```
+얼마나 나쁜가   OK / WARN / DEGRADED / STOP / FAULT
+어떤 모드인가   비상정지 래치가 걸렸다
+```
+
+E-stop을 등급 축에서 뺐다. `RobotFault.latched`와 `RobotHealth.state == ESTOPPED`가
+그 사실을 나타낸다. 폭주 억제 해제 조건도 `record.latched`로 바꿨다.
+
+공용 계약 변경이지만 아직 어느 저장소에도 머지되지 않아 지금은 커밋 하나다. 머지 후였다면
+세 저장소 동시 마이그레이션이었다.
+
+잃은 것은 "E-stop을 걸어야 할 만큼 심각"과 "주행만 막으면 됨"의 구분이다. 지금 그 구분을
+쓰는 코드가 없고(모니터는 정지 권한이 없다), 필요해지는 시점은 자동 복구다. **그때는 복구
+정책 필드로 표현한다. 표시용 등급에 다시 싣지 않는다.**
+
+### 검증
+
+- 테스트 188건(ROS) + 66건(앱) 통과
+- 기동 60초 타임라인이 설정값과 일치: `1.4s STARTING 0건 → 15.4s STOPPED 3건 →
+  20.4s 4건 → 30.4s 5건 → 45.4s 7건`
+- 55초 동안 이벤트 11건, reminder가 30초 간격 규칙을 지켰다(이전에는 매 tick)
+- 결함 문구 전부 한국어, 영문 요약어·자리표시자 누출 없음
+
+## 8-2. rosbridge 실측과 앱 종단
+
+앱 모델은 rosbridge가 커스텀 메시지를 어떤 JSON으로 직렬화하는지 **추론만** 했었다.
+실측 결과 필드가 평면으로 1:1 대응하고 `active_faults`는 평범한 JSON 배열,
+시각은 `{sec, nanosec}` 객체였다. 추론이 맞았지만 그 사실을 테스트로 고정했다 —
+실제 수신한 payload를 한 글자도 고치지 않고 `rosbridge_payload_test.dart`에 박았다.
+
+Flutter Linux desktop 앱을 실제로 띄워 시스템 진단 화면까지 확인했다. 등급 배지·부품
+한국어 이름·기계 판독 코드·문구·발생시각·횟수·지속시간·조치가 모두 표시됐다.
+
+`error_source` A/B:
+
+| 설정 | `error_reason` |
+| --- | --- |
+| `diagnostics`(기본) | `'No events recorded.'` |
+| `health` | `'진단 항목이 보고되지 않았습니다.'` |
+
+기본값이 현재 동작 그대로임을 확인했고, 이 작업이 해결하려던 문제가 A/B로 직접 드러났다.
+
 ## 9. 지금 상태
 
 **`vica_ros2_ws` — `integration/app-ui-system-monitor`** (미머지)
 
 ```
+472e104  등급 축에서 비상정지를 떼어내 래치로 표현 (계약 변경)
+22eac98  실기동에서 드러난 기동 유예·문구·상태 결함 3건 수정
 faed36a  모니터 노드와 aggregator 설정·launch
 d93c56f  app-UI/status-test 통합 머지 (CMakeLists 1줄 충돌 해소)
 029883d  외부 대상 대행 어댑터 노드
 bec43c1  관측 계층 메시지와 순수 판정 로직
 ```
 
-메시지 3종, 노드 2개, 순수 모듈 7개, config 3개, launch 1개. 패키지 테스트 **162건**
-(계약 33 / 중복억제 24 / 판정 23 / 프로브설정 22 / CPU 17 / 카탈로그 16 / agg파서 16 /
-신선도 8 + lint 3).
+메시지 3종, 노드 2개, 순수 모듈 7개, config 3개, launch 1개. 패키지 테스트 **188건**
+(8-1절의 회귀 테스트 포함).
 
 **`VICA_Supervisor` — `integration/app-ui-system-monitor`** (미머지)
 
 ```
+3b79269  등급 축에서 비상 정지 제거 (계약 변경)
+99ffd7b  rosbridge 실측 payload로 모델 파싱 고정
 b157f3c  시스템 진단 화면과 대시보드 결함 배너
 4a3aa1c  error_source 파라미터
 ```
 
-`dart format` exit 0, `flutter analyze` 무결함, `flutter test` **58건 통과**.
+`dart format` exit 0, `flutter analyze` 무결함, `flutter test` **66건 통과**.
 
 ## 10. Jetson에서 해야 할 것 (아직 안 함)
 

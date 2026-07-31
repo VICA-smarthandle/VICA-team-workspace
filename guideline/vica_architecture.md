@@ -143,7 +143,7 @@ float64 detected_at
 ```text
 string component
 string fault_code
-uint8 severity          # OK=0, WARN=1, DEGRADED=2, STOP=3, ESTOP=4, FAULT=5
+uint8 severity          # OK=0, WARN=1, DEGRADED=2, STOP=3, FAULT=4
 bool active
 bool latched
 uint32 occurrence_count
@@ -162,6 +162,24 @@ string suggested_action
 
 `first_seen`·`last_seen`은 사람에게 보여줄 시각이므로 SYSTEM_TIME이다. 만료·신선도
 판정에는 쓰지 않는다. 그 판정은 STEADY_TIME 계약을 따른다(9.4절).
+
+**등급 축에 비상정지가 없다.** E-stop은 STOP보다 한 단계 심각한 것이 아니라 종류가
+다르다 — 래치가 걸리고, 관리자 reset이 있어야 풀리고, `emergency_stop_node`가 소유한다.
+그 사실은 `latched`와 `RobotHealth.state == ESTOPPED`가 나타낸다.
+
+| 축 | 답하는 질문 | 표현 |
+| --- | --- | --- |
+| `severity` | 얼마나 나쁜가 | OK … STOP, FAULT |
+| `latched` | 관리자 reset이 필요한가 | bool |
+| `RobotHealth.state` | 어떤 모드인가 | … STOPPED, **ESTOPPED** … |
+
+등급에 섞으면 진단 결함 하나가 "비상 정지"로 표시되어 관리자가 있지도 않은 버튼을
+찾는다. 폭주 억제 해제 조건도 등급이 아니라 `latched`를 본다 — 등급으로 판정했을 때
+모터 진단 미수신이 초당 한 건씩 알림을 냈다.
+
+이 분리로 "E-stop을 걸어야 할 만큼 심각"과 "주행만 막으면 됨"의 구분은 사라졌다.
+그 구분이 필요해지는 시점은 자동 복구(초안 11절 `[TARGET]`)이며, 그때는 **복구 정책
+필드**로 표현한다. 표시용 등급에 다시 싣지 않는다.
 
 #### `RobotHealth`
 

@@ -44,7 +44,8 @@ costmap이 감지하지 못하고 오래된 3D 장애물로 주행한다. `vica_
 | **안전 신호는 체인을 타지 않고 직접 구독** | aggregator는 기본 1 Hz 집계라 ESTOP 표시가 최대 1초 늦는다. 초안 3.1이 `/diagnostics`를 안전 신호 전달 경로로 쓰지 말라고 한다 |
 | 모니터는 모터 정지 경로에 들어가지 않는다 | 초안 3.2. 모니터가 죽어도 `/cmd_vel_req → Safety → /cmd_vel_safe → CAN`이 유지되어야 한다 |
 | 외부 대상은 어댑터가 대신 진단 발행 | `rplidar_ros`·nvblox(Docker)·D455는 fork하면 계속 유지보수해야 한다. 어댑터를 두면 외부 타입 의존(`nvblox_msgs`)이 어댑터 프로세스에만 갇힌다 |
-| readiness는 bool이 아니라 3상태 | 4장 |
+| readiness는 bool이 아니라 3상태 | 5장 |
+| 등급 축과 래치 축을 분리 | E-stop은 STOP보다 심각한 등급이 아니라 종류가 다르다. 섞으면 진단 결함이 "비상 정지"로 표시되고, 폭주 억제 해제 조건도 잘못된다 |
 | 임계값을 코드에 두지 않는다 | 5장 |
 | 한국어 문구 정본은 로봇 쪽 | 앱에 두면 fault 추가마다 앱을 다시 배포하고 정본이 두 저장소로 갈라진다 |
 | 앱 복원을 `transient_local`에 의존하지 않는다 | Humble rosbridge의 `subscribe` op는 durability를 지정하지 않아 volatile로 붙고 latched 샘플을 못 받을 수 있다. 1 Hz 상시 발행 + `active_faults` 스냅샷으로 복원 |
@@ -73,6 +74,7 @@ robot_health_monitor_node ─┘                                                
 | 메시지 | 역할 |
 | --- | --- |
 | `RobotFault` | 결함 하나. Header 없는 순수 데이터라 아래 둘이 재사용 |
+| — | `severity`는 OK~STOP·FAULT 5단이며 **비상정지가 없다.** 래치는 `latched`와 `RobotHealth.state == ESTOPPED`가 나타낸다 |
 | `RobotHealth` | Header + state + readiness 9종 + `RobotFault[] active_faults` |
 | `RobotEvent` | Header + `RobotFault` + `transition`(RAISED/ESCALATED/REMINDER/CLEARED) |
 
