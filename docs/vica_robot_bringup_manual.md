@@ -79,6 +79,19 @@ export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 alias(`humble`, `can_set`, `vica_rs` 등)는 편의 수단일 뿐이므로 이 문서는 항상 원래
 명령을 정본으로 적는다.
 
+> **`$ROS_WS` 계열 alias는 현재 깨져 있다(2026-08-01 확인).** `~/.bashrc`의
+> `ROS_WS`가 `$HOME/ros2_ws`를 가리키는데 그 디렉터리가 존재하지 않는다. 그래서
+> `humble`, `rosws`, `ros_check`, `topics`, `nodes`, `key`, `motor_py`, `cam`, `g2`,
+> `rplidar`, `slam_toolbox`, `tf_tree`, `encoder` 등이 source 단계에서 실패한다.
+> 이 문서의 전체 명령을 쓰거나, 워크스페이스를 직접 source한다.
+>
+> ```bash
+> source /opt/ros/humble/setup.bash
+> source ~/VICA-smarthandle/vica_ros2_ws/install/setup.bash
+> ```
+>
+> `can_set`·`can_down`·`can_show`처럼 `$ROS_WS`를 쓰지 않는 alias는 정상 동작한다.
+
 launch 인자에 경로를 넘길 때는 `$HOME`을 쓴다. `map:=~/경로` 형태는 셸이 틸데를
 확장하지 않아 리터럴 `~`가 그대로 전달되고 지도 로딩이 실패한다.
 
@@ -257,22 +270,29 @@ cd ~/VICA-smarthandle/vica-voice-llm
 
 ### 4.9 상태 감시 패키지 (최초 1회)
 
-`vica_system_monitor`는 ROS 2 표준 `diagnostic_aggregator`를 쓴다. apt 패키지이며 현재
-**노트북·Jetson 둘 다 미설치**다. 한쪽에만 설치하면 launch가 갈라지므로 두 장비에서
-같이 설치한다.
+`vica_system_monitor`는 ROS 2 표준 `diagnostic_aggregator`를 쓴다. apt 패키지이며
+**Jetson에는 이미 설치되어 있다**(2026-08-01 확인). 노트북 설치 여부는 `[미확인]`이다.
+한쪽에만 설치하면 launch가 갈라지므로 노트북에서 아래로 확인하고 없으면 설치한다.
 
 ```bash
 sudo apt install -y ros-humble-diagnostic-aggregator
 ```
 
-설치 여부는 다음으로 확인한다.
+설치 여부는 다음으로 확인한다. `ros2` CLI를 쓸 수 없는 상태에서도 확인할 수 있도록
+두 가지를 함께 적는다.
 
 ```bash
 ros2 pkg prefix diagnostic_aggregator
+ls /opt/ros/humble/lib/diagnostic_aggregator/aggregator_node   # 실행파일 직접 확인
 ```
 
-어댑터가 쓰는 `ros-humble-diagnostic-updater`(4.0.6)와 `ros-humble-diagnostic-msgs`(4.9.1)는
-이미 설치되어 있다. Jetson에서도 같이 확인한다.
+Jetson 실측값(2026-08-01, `dpkg -l | grep diagnostic`)은 다음과 같다.
+
+| 패키지 | Jetson 설치 버전 |
+| --- | --- |
+| `ros-humble-diagnostic-aggregator` | 4.0.7-1jammy |
+| `ros-humble-diagnostic-updater` | 4.0.7-1jammy |
+| `ros-humble-diagnostic-msgs` | 4.9.1-1jammy |
 
 ## 5. 실행 순서
 
@@ -452,32 +472,32 @@ ros2 launch vica_nav2 nav2_map_test.launch.py \
 
 encoder를 이미 별도로 띄웠다면 `start_encoder:=false`로 넘긴다.
 
-### ⑨-1 위치 자동 초기화 (Host) `[미검증]`
+### ⑨-1 위치 자동 초기화 (Host) `[TARGET]`
+
+**이 단계는 아직 구현되어 있지 않다. 건너뛰고 ⑩으로 간다.**
+
+이 절이 안내하던 `vica_localization/pose_bootstrap.launch.py`는 저장소에 없다.
+2026-08-01 확인 결과 `vica_localization/launch/`에는 `wheel_ekf.launch.py` 하나뿐이고,
+`git log --all -- '*pose_bootstrap*'`도 비어 있어 어느 브랜치의 이력에도 없다.
+그대로 실행하면 launch file을 찾지 못해 매번 실패한다.
 
 ```bash
-ros2 launch vica_localization pose_bootstrap.launch.py map_id:=vica_map_0630
+ls ~/VICA-smarthandle/vica_ros2_ws/src/vica_localization/launch/   # wheel_ekf.launch.py 뿐
 ```
 
-기동 시 AMCL 초기 pose를 `home.yaml`의 홈 좌표로 자동 설정하고 검증한다.
-지금까지 RViz "2D Pose Estimate" 수동 조작에 의존하던 단계를 대신한다.
+따라서 초기 pose는 **종전대로 RViz "2D Pose Estimate"로 매번 수동 지정한다.**
+지정하지 않으면 `global_costmap`이 activating 상태에서 더 진행하지 않는다. 고장이
+아니라 AMCL이 초기 pose를 기다리는 정상 동작이다.
 
-성공하면 `/vica/localization_status`에 `state: ready`를 발행하고 종료한다.
-**Mission Manager는 이것을 받아야 주행을 승인한다.**
+구현할 때 목표하는 계약은 다음과 같다. 아래는 전부 `[TARGET]`이며 현재 동작하지 않는다.
 
-```bash
-ros2 topic echo /vica/localization_status --once
-```
-
-> **`home.yaml`이 없으면 이 단계를 건너뛴다.** 그 경우 ⑩에서
-> `require_localization_ready:=false`를 넘기고, 초기 pose는 종전대로 RViz에서 지정한다.
-> 넘기지 않으면 주행이 승인되지 않는다.
-
-> **검증에 실패하면 그 자리에서 멈춘다.** 자동으로 전역 재추정을 걸지 않는다 —
-> 위치를 모르는 채로 자율 주행하는 것이 더 위험하기 때문이다. 로봇 위치를 확인하고
-> 다시 실행하거나, RViz로 수동 지정 후 `require_localization_ready:=false`로 운용한다.
-
-임계값은 전부 `[미검증]`이다. 실기 튜닝 전에는 **로봇을 일부러 2 m 어긋난 곳에 두고
-검증이 실패하는지** 먼저 확인한다. 통과해 버리면 임계값이 너무 느슨한 것이다.
+- 기동 시 AMCL 초기 pose를 `home.yaml`의 홈 좌표로 자동 설정하고 검증한다.
+- 성공하면 `/vica/localization_status`에 `state: ready`를 발행하고 종료한다.
+  Mission Manager는 이것을 받아야 주행을 승인한다.
+- 검증에 실패하면 그 자리에서 멈추고 자동으로 전역 재추정을 걸지 않는다 —
+  위치를 모르는 채로 자율 주행하는 것이 더 위험하기 때문이다.
+- 임계값 튜닝은 **로봇을 일부러 2 m 어긋난 곳에 두고 검증이 실패하는지** 확인부터
+  한다. 통과해 버리면 임계값이 너무 느슨한 것이다.
 
 ### ⑩ Mission Manager (Host)
 
@@ -497,17 +517,23 @@ ros2 launch vica_mission_manager mission_manager.launch.py \
 - `/vica/robot_state` 1 Hz 발행(층·건물·이동 상태)
 - 확정 안내 문구를 `/vica/tts_request`로 발행
 
-`[미검증]` 홈 복귀 관련 인자는 다음과 같다.
+홈 복귀 관련 인자는 전부 `[TARGET]`이며 **지금 넘기면 launch가 거부한다.**
+2026-08-01 확인 기준 `mission_manager.launch.py`가 선언하는 인자는 `map_id`,
+`destination_storage_root`, `destinations_yaml`, `map_yaml`, `confirm_timeout_sec`,
+`estop_release_grace_sec`, `approach_slowdown_distance_m`,
+`approach_speed_limit_percent`, `current_floor`, `current_building`,
+`estop_pulse_sec`뿐이고 아래 네 개는 어느 브랜치에도 없다. ⑨-1과 함께 들어온다.
 
-| 인자 | 기본값 | 뜻 |
+| 인자 | 목표 기본값 | 뜻 |
 | --- | --- | --- |
 | `require_localization_ready` | `true` | ⑨-1의 검증을 요구한다. `false`면 위치 검증 없이 주행을 승인한다 |
 | `home_yaml` | `<storage_root>/<map_id>/home.yaml` | 없으면 자동 복귀만 꺼지고 안내는 정상 동작한다 |
 | `return_home_delay_sec` | `60.0` | 도착 후 이 시간이 지나면 홈으로 복귀한다 |
 | `return_home_warn_sec` | `5.0` | 복귀 몇 초 전에 음성으로 예고한다 |
 
-복귀 중 사용자가 새 목적지를 말하면 복귀를 취소하고 그쪽으로 간다(선점).
-E-stop이 걸리면 복귀 goal을 취소하며, **해제 후에도 스스로 다시 출발하지 않는다.**
+목표 동작은 다음과 같다. 복귀 중 사용자가 새 목적지를 말하면 복귀를 취소하고 그쪽으로
+간다(선점). E-stop이 걸리면 복귀 goal을 취소하며, **해제 후에도 스스로 다시 출발하지
+않는다.**
 
 ⑫와 `map_id`가 다르면 서로 다른 목적지 catalog를 보게 되므로 반드시 같은 값을 쓴다.
 
@@ -747,9 +773,8 @@ motor를 Safety보다 먼저 내려야 승인되지 않은 명령이 남지 않�
 | `/odom`이 튀거나 TF 경고 | `wheel_ekf`를 ⑨와 중복 실행 | 중복 프로세스 종료 후 ⑨만 유지 |
 | 앱이 연결 timeout | Jetson DHCP IP 변경 vs 앱 저장 IP 불일치 | `ip -br addr` 확인 후 앱 접속 주소 갱신 |
 | 2D Goal에 `/cmd_vel_req`가 없음 | Nav2 미기동 또는 remap 누락 | ⑨ 로그와 `ros2 topic info /cmd_vel_req` 확인 |
-| 모든 목적지 요청이 `localization_not_ready`로 거부 | ⑨-1을 띄우지 않았거나 검증 실패 | `ros2 topic echo /vica/localization_status --once`. `home.yaml`이 없으면 ⑩에 `require_localization_ready:=false` |
-| 도착 후 로봇이 혼자 떠남 | 자동 복귀 동작 중 | 정상이다. 시간을 늘리려면 ⑩의 `return_home_delay_sec` 조정 |
-| 도착해도 복귀하지 않음 | `home.yaml` 미설정·로드 실패, 또는 TF 조회 실패 | ⑩ 시작 로그의 홈 로드 메시지 확인. `map → base_footprint` TF 확인 |
+| 모든 목적지 요청이 `nav_not_ready`로 거부 | ⑨ Nav2 미기동이라 `NavigateToPose` action server가 준비되지 않음. 위치추정과는 무관하다 | ⑨ 로그 확인 후 `ros2 action list \| grep navigate_to_pose` |
+| 로봇이 제자리에서 안 움직이고 costmap이 `activating`에서 멈춤 | AMCL 초기 pose 미지정 | RViz "2D Pose Estimate"로 지정한다. 고장이 아니다(⑨-1은 미구현) |
 
 음성·LLM:
 

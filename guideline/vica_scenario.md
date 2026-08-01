@@ -375,11 +375,19 @@ Mission Manager는 다음 조건을 모두 검사한다.
 
 1. Mission Manager가 `map` frame의 goal을 한 번 전송한다.
 2. Nav2는 저장 지도, AMCL, costmap, planner와 controller를 사용한다.
-3. 현재 설정은 사용자 정의 BT XML이 아니라 Nav2 Humble 기본 NavigateToPose BT를 사용한다.
-4. global planner는 `SmacPlanner2D`, local controller는 DWB다(2026-07-28 NavFn에서 교체).
+3. 현재 설정은 `vica_nav2/behavior_trees/vica_navigate_to_pose_clearing_only.xml`
+   (사용자 정의 BT)을 사용한다. 이 트리는 **측정용**이라 복구가 costmap 초기화뿐이고
+   `Spin`·`Wait`·`BackUp`이 없다. 제품 구성이 아니며, 되돌릴 때는 예비 트리
+   `vica_navigate_to_pose_no_backup.xml`을 쓴다.
+4. global planner는 `SmacPlannerLattice`, local controller는 DWB다
+   (NavFn → SmacPlanner2D 2026-07-28 → Lattice 2026-07-30). `SmacPlannerHybrid`는
+   `GridBasedAlt` 비활성 블록으로만 남아 있어 로드되지 않는다.
 5. global costmap은 `/scan`, local costmap은 `/scan`과 nvblox slice를 장애물 입력으로 사용한다.
 6. controller 내부 출력 `/cmd_vel_nav`는 velocity smoother를 거쳐 `/cmd_vel_req`로 나간다.
 7. Safety Supervisor가 승인한 `/cmd_vel_safe`만 motor가 받는다. 실제 종단은 `[미검증]`이다.
+
+> 위 3·4번은 `vica_ros2_ws`의 `nav2-plannerhybrid-change` 브랜치 상태이며
+> **2026-08-01 기준 `dev`에 머지되지 않았다.**
 
 ## 7. Smart Handle 회전 사전 안내
 
@@ -604,9 +612,16 @@ reset 명령이 아니다. 관리자 인증과 유지보수 호출자 접근 통
 
 Mission Manager는 goal을 취소할 뿐 감속을 지시하지 않는다. 취소되면 `controller_server`가
 `/cmd_vel` 발행을 멈추고 `velocity_smoother`가 `max_decel` 기울기로 0까지 감속 램프를
-만든다. 정지감이 어색하면 `nav2_params.yaml`의 `velocity_smoother.max_decel`을 조정하되,
-`velocity_timeout`이 Safety의 `cmd_timeout_sec`보다 짧아야 한다는 제약을 함께 확인한다
-(`vica_architecture.md` 10.3.1절).
+만든다. 현재 값은 `[-2.5, 0.0, -3.2]`다.
+
+정지감이 어색하더라도 **`max_decel`을 낮춰서 해결하지 않는다.** 이 값은 DWB의
+`decel_lim_x`(-2.5)·`decel_lim_theta`(-3.2)와 같거나 더 세야 한다 — DWB는 자기가
+-2.5로 멈출 수 있다고 보고 궤적을 고르므로, smoother가 더 약하면 실제 정지거리가
+계획보다 길어진다. 2026-07-28에 -1.0이었을 때 전방 우측 범퍼가 실제로 충돌했다.
+`vica_nav2/test/test_nav2_params_contract.py`가 이 관계와, `velocity_timeout`이
+Safety의 `cmd_timeout_sec`보다 짧아야 한다는 제약을 함께 강제한다
+(`vica_architecture.md` 10.3.1절). "천천히 멈춘다"가 필요하면 감속률이 아니라
+정지 전 유예 시간으로 설계한다.
 
 ### 목적지 취소
 

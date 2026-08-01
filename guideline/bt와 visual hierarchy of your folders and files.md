@@ -16,18 +16,38 @@
 
 ## 2. 현재 BT 구성 요약
 
-### 2.1 저장소에 사용자 정의 BT XML은 없다
+### 2.1 저장소에 사용자 정의 BT XML이 2개 있다 `[CURRENT]`
 
-현재 `vica_ros2_ws/src/vica_nav2`에는 사용자 정의 Behavior Tree XML이 없다. `nav2_params.yaml`의 `default_nav_to_pose_bt_xml`과 `default_nav_through_poses_bt_xml`도 주석 상태이므로, `nav2_bt_navigator`가 설치된 Nav2의 기본 BT를 선택한다.
+> 2026-08-01 갱신. 종전에는 "사용자 정의 BT XML은 없다"고 적혀 있었으나 사실이 아니다.
+> 아래는 `vica_ros2_ws`의 `nav2-plannerhybrid-change` 브랜치 상태이며
+> **`dev`에 머지되지 않았다.**
 
-- 단일 목적지: `navigate_to_pose_w_replanning_and_recovery.xml`
-- 다중 경유지: `navigate_through_poses_w_replanning_and_recovery.xml`
+`vica_ros2_ws/src/vica_nav2/behavior_trees/`에 사용자 정의 Behavior Tree XML이 두 개 있다.
+
+| 파일 | 상태 | 복구 분기 |
+|---|---|---|
+| `vica_navigate_to_pose_clearing_only.xml` | **현재 활성** | `ClearEntireCostmap`(local·global)만 |
+| `vica_navigate_to_pose_no_backup.xml` | 예비 | `BackUp` 제거 + 좌우 `Spin`(`spin_dist` ±0.30 rad) + `Wait` |
+
+`nav2_params.yaml`의 `default_nav_to_pose_bt_xml`은 자리표시자 `SET_BY_VICA_NAV2_LAUNCH`만 두고, 실제 경로를 `nav2_map_test.launch.py`의 `RewrittenYaml`이 넣는다. yaml은 설치 경로를 계산할 수 없고 소스 트리 절대경로를 박으면 다른 장비에서 깨지기 때문이다. `RewrittenYaml`은 이미 존재하는 키만 치환하므로 yaml에 키가 반드시 있어야 한다. `default_nav_through_poses_bt_xml`은 지정하지 않아 Nav2 기본값을 쓴다.
+
+- 단일 목적지: `vica_navigate_to_pose_clearing_only.xml` (사용자 정의)
+- 다중 경유지: `navigate_through_poses_w_replanning_and_recovery.xml` (Nav2 기본)
 - VICA Mission Manager가 현재 호출하는 액션: `NavigateToPose`
-- 경로 계획기: `SmacPlanner2D` (2026-07-28 NavFn에서 교체)
+- 경로 계획기: `SmacPlannerLattice` (NavFn → SmacPlanner2D 2026-07-28 → Lattice 2026-07-30).
+  `SmacPlannerHybrid`는 `GridBasedAlt` 비활성 블록으로만 남아 `planner_plugins`에 없다
 - 경로 추종기: DWB
-- 복구 동작: 비용지도 초기화, 회전, 대기, 후진 등 Nav2 기본 복구 노드
+- 복구 동작: **비용지도 초기화뿐이다.** 회전·대기·후진은 없다
 
-기본 BT의 복구 분기 실측값(2026-07-29):
+> **현재 활성 트리는 측정용이지 제품 구성이 아니다.** 로봇을 움직이는 복구
+> (`Spin`·`Wait`·`BackUp`)를 전부 걷어냈다. 지금까지의 완주 성적이 recovery가
+> 흡수해서 나온 것이라 순수 주행 실력을 분리해 보려는 목적이고, 풀어야 할 문제가
+> "빠져나오기"가 아니라 "못 움직일 자리에 애초에 안 들어가기"이기 때문이다.
+> `ClearEntireCostmap`은 로봇을 움직이지 않고 유령 장애물이 미해결이라 남겼다.
+> 되돌릴 때는 launch의 파일명을 `vica_navigate_to_pose_no_backup.xml`로 바꾼다.
+> 제품 출하 구성은 아직 확정되지 않았다.
+
+아래는 이 트리들을 만들게 한 근거다. **Nav2 기본 BT**의 복구 분기 실측값(2026-07-29):
 
 ```text
 RecoveryNode "NavigateRecovery"  number_of_retries=6
@@ -53,7 +73,22 @@ RecoveryNode "NavigateRecovery"  number_of_retries=6
   반대로 트인 곳에서는 검사를 통과해 실제로 사람 쪽으로 후진하므로, 안전상 `BackUp`
   제거가 필요하다. `min_vel_x: 0.0`은 DWB만 막고 `behavior_server`에는 적용되지 않는다.
 
-아래 그림은 저장소 설정과 Nav2 기본 동작을 기준으로 단순화한 개념도다. 실제 BT 노드와 포트의 최종 기준은 실행 중 선택된 Nav2 설치본의 XML이다.
+이 실측이 위 두 트리를 만든 이유다. 현재 활성 트리의 실제 구조는 다음과 같다.
+
+```text
+RecoveryNode "NavigateRecovery"  number_of_retries=6
+├─ PipelineSequence            RateController 1 Hz + ComputePathToPose(planner_id="GridBased") / FollowPath
+│   각 작업 실패 시 해당 costmap만 초기화하고 1회 재시도
+└─ ReactiveFallback → RoundRobin
+    └─ Sequence "ClearingActions"  ClearEntireCostmap(local) + ClearEntireCostmap(global)
+       Spin·Wait·BackUp 없음. Wait가 없어 RoundRobin 순환에 지연이 없다
+```
+
+정본은 `vica_nav2/behavior_trees/vica_navigate_to_pose_clearing_only.xml`이며, 그
+파일의 머리 주석에 제거 사유가 항목별로 적혀 있다.
+
+아래 그림은 **Nav2 기본 BT**를 기준으로 단순화한 개념도다(위 실측의 대상). 현재 활성
+트리에는 `Spin`·`Wait`·`BackUp` 분기가 없다.
 
 ```mermaid
 flowchart TD
@@ -87,8 +122,11 @@ flowchart TD
 BT를 사용자 정의할 때는 XML만 추가하지 말고 다음 항목을 함께 변경한다.
 
 1. `vica_nav2/behavior_trees/`에 XML을 추가한다.
-2. `setup.py`의 `data_files`에 XML 설치 규칙을 추가한다.
-3. `nav2_params.yaml`에서 기본 BT XML 경로를 명시한다.
+2. `setup.py`의 `data_files`에 XML 설치 규칙을 추가한다. 없으면 share에 설치되지 않아
+   launch가 경로를 찾지 못한다.
+3. `nav2_params.yaml`에 `default_nav_to_pose_bt_xml` 키를 자리표시자로 두고, 실제 경로는
+   launch의 `RewrittenYaml`에서 넣는다(`RewrittenYaml`은 이미 있는 키만 치환한다).
+   yaml에 절대경로를 직접 박으면 다른 장비에서 깨진다.
 4. E-stop 중 액션 취소, 복구 중 속도 명령 차단, 재시작 시 수동 reset 조건을 시험한다.
 5. BT Navigator가 로드한 XML 경로를 시작 로그에서 확인한다.
 

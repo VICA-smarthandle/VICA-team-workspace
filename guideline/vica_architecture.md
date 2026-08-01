@@ -375,7 +375,7 @@ E-stop reset 뒤 이전 goal은 자동 재개하지 않는다.
 
 | 영역 | 현재 설정 |
 | --- | --- |
-| Global planner | `nav2_smac_planner/SmacPlanner2D` (2026-07-28 NavFn에서 교체) |
+| Global planner | `nav2_smac_planner/SmacPlannerLattice` (NavFn → SmacPlanner2D 2026-07-28 → Lattice 2026-07-30) |
 | Local controller | `dwb_core::DWBLocalPlanner` |
 | DWB obstacle critic | `ObstacleFootprint` (scale 0.15). `BaseObstacle`은 원형 가정이라 부적합 |
 | 최대 직선 속도 | 0.26 m/s |
@@ -394,9 +394,26 @@ footprint는 2026-07-27 전방 좌측 범퍼 실충돌 뒤 `vica_description/mes
 
 여기서 파생되는 구조적 제약이 하나 있다. footprint 내접반경은 0.277 m인데
 외접반경은 0.707 m로 **2.6배** 차이가 난다(핸들 때문에 차체가 0.905 m로 길다).
-`SmacPlanner2D`는 중심 셀 비용만 보는 **점 로봇 planner**라 내접반경만 보장한다.
-그래서 planner가 "통과 가능"으로 그린 자리에서 DWB의 `ObstacleFootprint`가
-회전 궤적을 전부 거부해 로봇이 굳는 사례가 실측됐다(2026-07-29, `[GAP]`).
+`NavFn`과 `SmacPlanner2D`는 중심 셀 비용만 보는 **점 로봇 planner**라 내접반경만
+보장했다. 그래서 planner가 "통과 가능"으로 그린 자리에서 DWB의 `ObstacleFootprint`가
+회전 궤적을 전부 거부해 로봇이 굳는 사례가 실측됐다(2026-07-29). 맵 free 영역
+106.4 m²에서 planner 74.9 % vs controller 42.0 %로 **32.9 %p**가 벌어졌고,
+footprint 3.3 cm 보정으로는 이 격차의 6.1 %만 줄었다.
+
+`SmacPlannerLattice`는 `NodeLattice::isNodeValid`가 padding 포함 footprint 전체를
+검사하므로 DWB의 `ObstacleFootprint`와 같은 기준을 쓴다. 이것이 2026-07-30에
+planner를 바꾼 이유다. Lattice는 Humble 기본 diff 격자(primitive 112개 중 제자리 회전
+32개)를 쓰며, 회전반경이 격자에 0.5 m로 고정되고 방향 분해능이 16 headings(22.5°)로
+거칠다는 대가를 진다. 방향 분해능은 DWB가 추종하면서 메꾼다.
+
+`SmacPlannerHybrid`는 `GridBasedAlt` 키의 **비활성 블록**으로만 남아 있다.
+`planner_plugins: ["GridBased"]`에 없으므로 Nav2가 로드하지 않는다. Hybrid(DUBIN)는
+제자리 회전 primitive가 없어 반경 0.50 m 호로만 방향을 바꾸는데, 180° 전환에 통로 폭
+1.85 m가 필요하다. 맵 통로 폭은 중앙값 1.40 m, 최협 1.10 m라 어느 통로에서도 불가라
+경로를 못 찾고 BT recovery로 넘어갔다.
+
+> 이 planner 전환은 `vica_ros2_ws`의 `nav2-plannerhybrid-change` 브랜치 상태이며
+> **2026-08-01 기준 `dev`에 머지되지 않았다.** 확정 사항이 아니다.
 
 `nvblox_layer`는 local costmap `plugins`에 포함되며
 `nvblox::nav2::NvbloxCostmapLayer`를 사용한다. slice 입력은
@@ -408,12 +425,27 @@ costmap→Goal 종단은 `[미검증]`이다.
 
 ### 7.3 Behavior Tree
 
-사용자 정의 BT XML은 저장소에 없다. 현재 Nav2 기본 파일을 사용한다.
+사용자 정의 BT XML이 **2개 있다.** `vica_nav2/behavior_trees/`에 들어 있으며,
+`nav2_params.yaml`의 `default_nav_to_pose_bt_xml`은 자리표시자
+(`SET_BY_VICA_NAV2_LAUNCH`)만 두고 실제 경로를 `nav2_map_test.launch.py`의
+`RewrittenYaml`이 넣는다. yaml은 설치 경로를 계산할 수 없기 때문이다.
 
 ```text
-nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
-nav2_bt_navigator/navigate_through_poses_w_replanning_and_recovery.xml
+vica_nav2/behavior_trees/vica_navigate_to_pose_clearing_only.xml   현재 활성
+vica_nav2/behavior_trees/vica_navigate_to_pose_no_backup.xml       예비
+nav2_bt_navigator/navigate_through_poses_w_replanning_and_recovery.xml  (through_poses는 기본값)
 ```
+
+> **현재 활성 트리는 측정용이지 제품 구성이 아니다.**
+> `vica_navigate_to_pose_clearing_only.xml`의 복구 분기에는
+> `ClearEntireCostmap`(local·global)만 있고 **로봇을 움직이는 복구가 하나도 없다**
+> — `Spin`·`Wait`·`BackUp`을 전부 걷어냈다. 지금까지의 완주 성적이 recovery가
+> 흡수해서 나온 것이라 순수 주행 실력을 분리해 보려는 목적이다. 되돌리려면 launch의
+> 파일명을 `vica_navigate_to_pose_no_backup.xml`(BackUp 제거 + 좌우 Spin + Wait)로
+> 바꾼다. 제품 출하 구성은 아직 확정되지 않았다.
+
+> 이 BT 구성 역시 `vica_ros2_ws`의 `nav2-plannerhybrid-change` 브랜치 상태이며
+> **2026-08-01 기준 `dev`에 머지되지 않았다.**
 
 복구 동작의 속도 명령은 `behavior_server`가 직접 발행한다. Nav2 humble
 `navigation_launch.py`는 `controller_server`에만 `('cmd_vel', 'cmd_vel_nav')`를 주고
@@ -778,8 +810,15 @@ E-stop과 성격이 다른 별도 경로다. 안전 사건이 아니라 목표 �
 Mission Manager는 `cancelTask()`로 `NavigateToPose` goal을 취소할 뿐 감속을 지시하지
 않는다. 취소되면 `controller_server`가 `/cmd_vel` 발행을 멈추고, 그 뒤를
 `velocity_smoother`가 `max_decel`(현재 `[-2.5, 0.0, -3.2]`) 기울기로 0까지 이어 붙여
-감속 램프를 만든다. 이 값은 도착·취소·controller 정지에 전역 적용되며 `[미검증]`
-트레이드오프로 남아 있어 실기에서 확정한다.
+감속 램프를 만든다. 이 값은 도착·취소·controller 정지에 전역 적용된다.
+
+> **이 값을 DWB 아래로 낮추지 않는다.** `max_decel`은 DWB의
+> `decel_lim_x`(-2.5)·`decel_lim_theta`(-3.2)와 **같거나 더 세야** 한다. DWB는
+> 자기가 -2.5로 멈출 수 있다고 보고 궤적을 고르는데 smoother가 -1.0이면 실제
+> 정지거리가 2.5배가 된다. 2026-07-28 주행에서 정확히 이 불일치로 명령이 vx
+> +0.010 m/s인데 실제는 +0.227 m/s였고 전방 우측 범퍼가 충돌했다.
+> `vica_nav2/test/test_nav2_params_contract.py::test_smoother_lets_dwb_stop_moving_as_fast_as_it_plans_to`가
+> 이 관계를 고정한다.
 
 `max_velocity`가 `[0.26, 0.0, 1.0]`이므로 이 감속률에서 정지까지 약 0.104초, 0.0135 m다.
 즉 감속 램프와 즉시 정지의 물리적 차이가 매우 작다. 사용자에게 "천천히 멈춘다"를 제공해야
