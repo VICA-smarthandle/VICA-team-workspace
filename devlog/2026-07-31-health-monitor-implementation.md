@@ -486,17 +486,44 @@ guidance 0  voice 0  app 0
 어댑터 기동 로그가 `5 topic probes, 4 process probes, 1 skipped`다. skip 1건은
 `nvblox_slice`이며 원인은 `nvblox_msgs`를 import할 수 없어서다.
 
+**원인은 overlay를 source하지 않은 것이 아니다. 끊어진 심볼릭 링크다.**
+
 ```text
-/opt/ros/humble/share/nvblox_msgs        없음
-/home/ji_w/workspaces/isaac_ros-dev/install/nvblox_msgs   있음
+install/nvblox_msgs/.../nvblox_msgs/msg/__init__.py
+    -> /workspaces/isaac_ros-dev/build/nvblox_msgs/rosidl_generator_py/nvblox_msgs/msg/__init__.py
 ```
 
-`nvblox_msgs`는 Isaac ROS overlay에 있다. **호스트에서 감시 노드를 그냥 띄우면 nvblox
-slice를 볼 수 없다.** `optional: true`라 어댑터는 계속 동작하지만, slice stale 감지
-자체가 없는 상태가 된다.
+이 workspace는 Docker 컨테이너 안에서 빌드됐고, `install/`에 남은 것은 컨테이너 내부
+경로를 가리키는 링크다. **호스트에는 `/workspaces` 자체가 없어 전부 dangling이다.**
+`share/nvblox_msgs/msg/DistanceMapSlice.msg`도 마찬가지다. `ls`에는 보이지만 열리지 않는다.
+
+확인한 사실:
+
+| 항목 | 결과 |
+| --- | --- |
+| `.so` 링크(`ldd`) | **정상** — `not found` 0건. ABI 문제가 아니다 |
+| `AMENT_PREFIX_PATH`·`PYTHONPATH`·`LD_LIBRARY_PATH` 수동 지정 | 실패 (`unknown location`) |
+| `install/setup.bash` source | 실패 — 다른 패키지의 `local_setup.bash`도 없다 |
+| **원본 소스** | **호스트에 있다** — `src/isaac_ros_nvblox/nvblox_msgs/` |
+
+`vica_architecture.md`가 기록한 nvblox_layer Host 플러그인 dangling symlink와 **같은 부류의
+실패**다. 이 장비에서 반복되는 함정이므로 Docker 빌드 산출물을 호스트에서 쓸 때마다
+링크 생존을 먼저 확인한다.
+
+`optional: true`라 어댑터는 계속 동작하지만 **slice stale 감지 자체가 없는 상태**다.
+`probes.yaml`의 nvblox 임계값은 이 상태에서 확정할 수 없다.
 
 10절 "Docker `/proc` 가시성" 항목과 별개 문제다. 그쪽은 프로세스 CPU, 이쪽은 메시지 타입
-가용성이다. **1차 측정 때 overlay를 source해서 띄울지 결정해야 한다.**
+가용성이다.
+
+**대응은 세 가지이며 아직 정하지 않았다.**
+
+1. 호스트에서 `nvblox_msgs`만 빌드한다(소스가 호스트에 있으므로 가능). 메시지 전용
+   패키지라 가볍고, 감시 노드가 호스트에 남아 `/proc`을 계속 볼 수 있다
+2. 감시 노드를 컨테이너 안에서 띄운다. nvblox와 환경이 같아 확실하나 호스트 프로세스
+   CPU 관측이 달라져 다른 측정이 깨진다
+3. 프로브를 건너뛴 채 두고 slice Hz는 컨테이너 안에서 `ros2 topic hz`로 직접 잰다.
+   10절이 요구하는 것은 어차피 수동 측정이므로 1차 측정은 이대로 진행할 수 있다
 
 ### 13.8 아직 검증하지 못한 것
 
