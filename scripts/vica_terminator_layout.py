@@ -91,6 +91,7 @@ class Term:
         ros: bool = True,
         precheck: str = "",
         monitor_overlay: bool = False,
+        guard: tuple[str, ...] = (),
     ) -> None:
         self.title = title
         self.note = note
@@ -104,6 +105,9 @@ class Term:
         self.precheck = precheck
         # 감시 패키지 overlay 탐색이 필요한 칸.
         self.monitor_overlay = monitor_overlay
+        # 중복 실행을 막을 프로세스 이름들(`pgrep -x` 기준, 15자 comm).
+        # 비어 있으면 검사하지 않는다 — shell 처럼 여러 개 띄워도 되는 칸이다.
+        self.guard = guard
 
 
 def build_terms(map_id: str) -> dict[str, Term]:
@@ -158,7 +162,8 @@ def build_terms(map_id: str) -> dict[str, Term]:
             ),
             command="ros2 launch vica_description display.launch.py",
             mode=AUTO,
-        ),
+                    guard=("robot_state_pub", "joint_state_pub",),
+),
         "lidar": Term(
             title="③ lidar",
             note=(
@@ -172,7 +177,8 @@ def build_terms(map_id: str) -> dict[str, Term]:
                 " -p flip_x_axis:=true -p scan_mode:=Express"
             ),
             mode=AUTO,
-        ),
+                    guard=("rplidar_node",),
+),
         "safety": Term(
             title="④ safety",
             note=(
@@ -182,7 +188,8 @@ def build_terms(map_id: str) -> dict[str, Term]:
             ),
             command="ros2 launch vica_safety safety_bringup.launch.py",
             mode=AUTO,
-        ),
+                    guard=("emergency_stop_", "safety_supervis", "app_emergency_n",),
+),
         # ------------------------------------------------------------------
         # ⑤~⑩ 구동·인지·주행. 바퀴가 돈다.
         # ------------------------------------------------------------------
@@ -195,7 +202,8 @@ def build_terms(map_id: str) -> dict[str, Term]:
             ),
             command="ros2 launch mdrobot_can_control motor_bringup.launch.py",
             mode=HOLD,
-        ),
+                    guard=("mdrobot_can_keyb", "keyboard_knob",),
+),
         "d455": Term(
             title="⑥ d455",
             note=(
@@ -219,7 +227,8 @@ def build_terms(map_id: str) -> dict[str, Term]:
                 " -p target_frame:=base_link"
             ),
             mode=AUTO,
-        ),
+                    guard=("imu_base_link_a",),
+),
         "nvblox": Term(
             title="⑧ nvblox",
             note=(
@@ -234,7 +243,8 @@ def build_terms(map_id: str) -> dict[str, Term]:
             ),
             mode=HOLD,
             ros=False,
-        ),
+                    guard=("nvblox_node",),
+),
         "nav2": Term(
             title="⑨ nav2",
             note=(
@@ -246,7 +256,8 @@ def build_terms(map_id: str) -> dict[str, Term]:
             ),
             command=f"ros2 launch vica_nav2 nav2_map_test.launch.py map:={map_yaml}",
             mode=HOLD,
-        ),
+                    guard=("bt_navigator", "planner_server", "controller_serv", "amcl",),
+),
         "mission": Term(
             title="⑩ mission",
             note=(
@@ -258,7 +269,8 @@ def build_terms(map_id: str) -> dict[str, Term]:
                 f" map_id:={map_id} map_yaml:={map_yaml}"
             ),
             mode=HOLD,
-        ),
+                    guard=("vica_mission_man",),
+),
         # ------------------------------------------------------------------
         # ⑪~⑬ 앱·감시·음성.
         # ------------------------------------------------------------------
@@ -273,7 +285,8 @@ def build_terms(map_id: str) -> dict[str, Term]:
                 f" map_yaml:={map_yaml}"
             ),
             mode=HOLD,
-        ),
+                    guard=("rosbridge_websoc",),
+),
         "monitor": Term(
             title="⑪-1 monitor",
             note=(
@@ -285,7 +298,8 @@ def build_terms(map_id: str) -> dict[str, Term]:
             command="ros2 launch vica_system_monitor system_monitor.launch.py",
             mode=HOLD,
             monitor_overlay=True,
-        ),
+                    guard=("robot_health_mo", "external_diagno", "aggregator_node",),
+),
         "gui": Term(
             title="app GUI",
             note=(
@@ -303,7 +317,8 @@ def build_terms(map_id: str) -> dict[str, Term]:
                 f"ls -l {SUPERVISOR}/build/linux/arm64/release/bundle/vica_supervisor"
                 " 2>&1 | head -2"
             ),
-        ),
+                    guard=("vica_supervisor",),
+),
         "llm": Term(
             title="⑫ llm+tts",
             note=(
@@ -314,7 +329,8 @@ def build_terms(map_id: str) -> dict[str, Term]:
             command=f"ros2 launch launch/vica_voice.launch.py map_id:={map_id}",
             mode=HOLD,
             workdir=VOICE,
-        ),
+                    guard=("vica_llm_node", "vica_tts_node",),
+),
         "stt": Term(
             title="⑬ stt",
             note=(
@@ -324,20 +340,79 @@ def build_terms(map_id: str) -> dict[str, Term]:
             command=".venv/bin/python -m src.ros_stt_node",
             mode=HOLD,
             workdir=VOICE,
-        ),
+                    guard=("vica_stt_node",),
+),
         # ------------------------------------------------------------------
         # 조작·점검. 운영 단계가 아니라 사람이 쓰는 도구다.
         # ------------------------------------------------------------------
         "goto": Term(
             title="goto",
             note=(
-                "목적지 요청(CLI). 따옴표 안 목적지명을 바꿔 실행한다.",
-                "Nav2 action을 직접 치지 않고 Mission Manager service를 호출한다.",
-                "RViz 2D Pose Estimate로 초기 위치를 먼저 잡아야 승인된다.",
+                "목적지 요청(CLI). 인자 없이 실행하면 번호 목록이 나온다.",
+                "  vica_goto.sh          목록",
+                "  vica_goto.sh 4        4번으로 주행 요청",
+                "  vica_goto.sh cancel   진행 중 주행 취소",
+                "목적지 이름이 한글인데 xfreerdp(RDP)에서 한영 전환이 안 되어",
+                "번호로 고르게 만들었다. 서비스가 받는 것은 UUID라 이름은 표시용이다.",
+                "초기 위치를 먼저 잡아야 승인된다 — 왼쪽 initpose 칸을 본다.",
             ),
-            command=f'python3 {SUPERVISOR}/ros2/vica_goto_goal.py {map_id} "목적지명"',
+            command="bash $VICA_ROOT/scripts/vica_goto.sh",
             mode=HOLD,
         ),
+        "initpose": Term(
+            title="initpose",
+            note=(
+                "AMCL 초기 위치를 명령으로 넣는다. RViz의 2D Pose Estimate와 같은 일이다.",
+                "  vica_set_initial_pose.sh              장소 목록",
+                "  vica_set_initial_pose.sh 안내소        저장된 장소로",
+                "  vica_set_initial_pose.sh -6.18 3.68 0  좌표로 (x y yaw도)",
+                "RViz가 원격에서 CPU 170 %를 쓰며 느려지면 클릭-드래그가 완성되지 않는다.",
+                "2026-08-01에 실제로 그래서 못 찍었다. 이 칸이 그 우회로다.",
+                "안 넣으면 map->odom TF가 없어 Nav2가 경로를 내지 못한다.",
+            ),
+            command="bash $VICA_ROOT/scripts/vica_set_initial_pose.sh",
+            mode=HOLD,
+        ),
+        "record": Term(
+            title="record",
+            note=(
+                "주행 회차 기록. 사전 점검을 먼저 하고 통과해야 기록을 시작한다.",
+                "  vica_drive_record.sh run03               점검 + 기록",
+                "  vica_drive_record.sh run03 --check-only  점검만",
+                "점검이 막는 것은 can1 상태·필수 노드·주행 명령 배선이다.",
+                "배선이 끊긴 채로 기록하면 그 회차가 통째로 무효가 되므로 먼저 잡는다.",
+                "Ctrl+C로 멈춘다. 파일은 ~/vica_data/bags/<이름>/ 에 남는다.",
+            ),
+            command="bash $VICA_ROOT/scripts/vica_drive_record.sh run$(date +%H%M)",
+            mode=HOLD,
+        ),
+        "handle": Term(
+            title="⑭ handle",
+            note=(
+                "스마트핸들. /odom을 보고 회전 예고를 /vica/turn_guide로 낸다.",
+                "핸들 하드웨어가 연결돼 있어야 driver 쪽이 의미가 있다.",
+                "바퀴를 돌리지 않으므로 순서 제약은 없지만 /odom이 먼저 나와야 한다.",
+            ),
+            command="ros2 launch vica_user_guidance user_guidance.launch.py",
+            mode=HOLD,
+                    guard=("turn_guide_node", "user_guidance_d",),
+),
+        "rviz": Term(
+            title="rviz",
+            note=(
+                "[무거움] 원격(xrdp)에서 CPU 코어 2개를 쓴다. 주행 중에는 끄는 것이 낫다.",
+                "켜둔 채 주행하면 Nav2 계산이 밀려 '로봇이 느린 것'과 구분되지 않는다.",
+                "초기 위치는 왼쪽 initpose 칸으로 넣을 수 있어 RViz 없이도 주행한다.",
+                "Fixed Frame이 map이어야 2D Pose Estimate가 AMCL에 닿는다.",
+                "지도 확인이 끝나면 Ctrl+C로 바로 끈다.",
+            ),
+            command=(
+                "ros2 run rviz2 rviz2 -d"
+                " $VICA_ROS_WS/src/vica_description/rviz/urdf.rviz"
+            ),
+            mode=HOLD,
+                    guard=("rviz2",),
+),
         "reset": Term(
             title="reset",
             note=(
@@ -420,7 +495,8 @@ PROFILES: dict[str, Profile] = {
         columns=[
             ["power", "can", "display", "lidar", "safety"],
             ["motor", "d455", "imu", "nvblox", "nav2"],
-            ["mission", "app", "monitor", "goto", "reset"],
+            ["mission", "app", "gui", "monitor", "handle"],
+            ["initpose", "goto", "record", "reset", "rviz"],
             ["llm", "stt", "check", "teleop", "shell"],
         ],
     ),
@@ -435,7 +511,8 @@ PROFILES: dict[str, Profile] = {
         columns=[
             ["power", "can", "display", "lidar", "safety"],
             ["motor", "d455", "imu", "nvblox", "nav2"],
-            ["mission", "app", "monitor", "goto", "reset"],
+            ["mission", "app", "gui", "monitor", "handle"],
+            ["initpose", "goto", "record", "reset", "rviz"],
             ["check", "teleop", "shell"],
         ],
     ),
@@ -482,6 +559,9 @@ ROS_BLOCK = """\
 # 운영 빌드 워크스페이스. 다른 빌드를 쓰려면 터미널을 띄우기 전에 export 한다.
 # 대기 중인 명령이 $VICA_ROS_WS 를 그대로 담고 있으므로 export 해서 자식에도 넘긴다.
 export VICA_ROS_WS="${{VICA_ROS_WS:-{ros_ws}}}"
+# 저장소 루트. scripts/ 아래 도구(goto·initpose·record)가 여기를 기준으로 돈다.
+# 워크스페이스의 부모라 별도 인자 없이 유도한다.
+export VICA_ROOT="${{VICA_ROOT:-$(dirname "$VICA_ROS_WS")}}"
 source /opt/ros/humble/setup.bash
 if [ -f "$VICA_ROS_WS/install/setup.bash" ]; then
   source "$VICA_ROS_WS/install/setup.bash"
@@ -501,6 +581,47 @@ vica_have_pkg() {{
     [ -f "$_prefix/share/ament_index/resource_index/packages/$_pkg" ] && return 0
   done
   return 1
+}}
+
+# 같은 노드가 이미 떠 있는지 본다. 인자는 `pgrep -x`가 쓰는 comm 이름들이다.
+#
+# 2026-08-01에 이것 때문에 하루를 잃었다. 터미네이터를 두 화면(:1, :10)에 띄워
+# 스택이 통째로 두 벌 돌았고, /odom 발행자가 둘이 되어 위치가 튀었다. 뒤이어
+# RViz만 두 개 뜬 적도 있었는데 그때는 CPU가 모자라 EKF가 설정 30 Hz의 절반인
+# 15.5 Hz로 떨어졌다(RViz 하나가 코어 1.5개를 쓴다). 둘 다 증상이 "위치추정
+# 오류"로 나타나 설정을 의심하며 시간을 썼다.
+#
+# ros2 CLI를 쓰지 않는다. DDS graph는 죽은 노드를 한동안 캐시해서 오탐이 나고,
+# 조회 자체가 느리다. 프로세스 테이블이 지금 이 순간의 사실이다.
+vica_running() {{
+  local _name _pid _self=$$
+  for _name in "$@"; do
+    for _pid in $(pgrep -x "$_name" 2>/dev/null); do
+      [ "$_pid" = "$_self" ] && continue
+      return 0
+    done
+  done
+  return 1
+}}
+
+# 실행 직전 중복을 막는다. 이미 떠 있으면 명령을 내보내지 않는다.
+vica_guard() {{
+  if vica_running "$@"; then
+    printf '\\033[0;31m[중복]\\033[0m 이미 실행 중입니다:\\n'
+    local _n _p
+    for _n in "$@"; do
+      for _p in $(pgrep -x "$_n" 2>/dev/null); do
+        printf '  %-20s pid %-8s 경과 %s초\\n' "$_n" "$_p" \\
+          "$(ps -o etimes= -p "$_p" 2>/dev/null | tr -d ' ')"
+      done
+    done
+    printf '\\033[0;33m두 벌이 돌면 /odom 발행자가 둘이 되어 위치가 튑니다.\\033[0m\\n'
+    printf '그 칸에서 Ctrl+C 로 내리고 다시 실행하거나, 이 칸을 쓰지 마세요.\\n'
+    printf '그래도 띄우려면: \\033[0;36mVICA_FORCE=1\\033[0m 을 붙여 실행합니다.\\n\\n'
+    [ -n "$VICA_FORCE" ] || return 1
+    printf '\\033[0;33m[VICA_FORCE] 경고를 무시하고 진행합니다.\\033[0m\\n'
+  fi
+  return 0
 }}
 """
 
@@ -534,6 +655,10 @@ PRECHECK_BLOCK = """\
 printf '\\033[0;34m현재 상태\\033[0m\\n'
 {precheck}
 printf '\\n'
+"""
+
+GUARD_BLOCK = """\
+vica_guard {names} || return 2>/dev/null || exit 0
 """
 
 AUTO_BLOCK = """\
@@ -589,6 +714,14 @@ def render_rc(term: Term, ros_ws: Path) -> str:
         PRECHECK_BLOCK.format(precheck=term.precheck) if term.precheck else ""
     )
 
+    # 중복 검사. auto 는 바로 실행하므로 실행 직전에, hold 는 사람이 누르기 전에
+    # 알려 주면 되므로 명령을 history 에 넣기 전에 둔다. 둘 다 같은 자리다.
+    if term.guard:
+        names = " ".join(f'"{n}"' for n in term.guard)
+        guard_block = GUARD_BLOCK.format(names=names)
+    else:
+        guard_block = ""
+
     if term.mode == AUTO:
         run_block = AUTO_BLOCK.format(
             command=term.command, command_q=shell_quote(term.command)
@@ -604,7 +737,7 @@ def render_rc(term: Term, ros_ws: Path) -> str:
         cd_block=cd_block,
         title_q=shell_quote(term.title),
         note_block=note_block,
-        precheck_block=precheck_block,
+        precheck_block=precheck_block + guard_block,
         run_block=run_block,
     )
 
