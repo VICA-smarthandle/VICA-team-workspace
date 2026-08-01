@@ -213,7 +213,9 @@ b157f3c  시스템 진단 화면과 대시보드 결함 배너
 
 `dart format` exit 0, `flutter analyze` 무결함, `flutter test` **66건 통과**.
 
-## 10. Jetson에서 해야 할 것 (아직 안 함)
+## 10. Jetson에서 해야 할 것 (~~아직 안 함~~ → 1차 측정 완료)
+
+> **1차 측정은 2026-08-01에 끝났다. 실측값은 14절에 있다.** 아래는 그때의 계획이다.
 
 착수 전 **노트북·Jetson 둘 다** `sudo apt install -y ros-humble-diagnostic-aggregator`.
 현재 양쪽 다 미설치라 aggregator 경로는 한 번도 실행된 적이 없다.
@@ -597,10 +599,193 @@ find <workspace>/install -xtype l
 
 ### 13.9 다음 순서
 
-1. **1차 측정(10절)** — `imu adapter` CPU와 EKF 실효 Hz는 최적화의 유일한 before다.
-   EKF baseline은 `/wheel/odom`을 입력으로 받으므로 **모터 노드(CAN)가 필요하다.**
-   바퀴를 띄우고 물리 E-stop을 확보한 뒤 읽기 전용으로만 측정한다.
+1. ~~**1차 측정(10절)**~~ → **14절에서 완료했다.**
 2. `probes.yaml` 임계값 확정
-3. 13.6 `process_cpu` 처리 결정
+3. 13.6 `process_cpu` 처리 결정 → **14.5에서 실제 오측정이 확인되어 우선순위가 올라갔다**
 4. 2차 fault injection (별도 승인)
 5. `error_source` 기본값 `health` 전환 (별도 커밋)
+
+## 14. 1차 측정 결과 (2026-08-01, Jetson 실기)
+
+10절 표의 여섯 항목을 전부 측정했다. **바퀴를 띄운 상태이고 주행 명령은 한 번도 발행하지
+않았다**(`/cmd_vel_req` 수신 0건이 그 증거다).
+
+### 14.1 측정 조건
+
+노드 40개 기동. 매뉴얼 5절 순서를 따랐다. 다만 두 가지가 다르다.
+
+- **② `display.launch.py` 대신 `robot_state_publisher` + `joint_state_publisher`만 띄웠다.**
+  그 launch는 RViz2와 `joint_state_publisher_gui`를 함께 띄우는데, CPU baseline을 재는
+  것이 목적이므로 GUI 부하를 넣지 않았다. `laser_joint`·`camera_joint`가 `fixed`라
+  `/joint_states` 없이도 필요한 TF가 나온다.
+- **로봇 스택은 `vica_ros2_ws/install`(운영 빌드), 감시 노드는 `wt-monitor/install`에서
+  띄웠다.** 두 워크스페이스가 DDS로 통신한다. `nav2-plannerhybrid-change` 빌드를
+  건드리지 않기 위해서다.
+
+`can1`은 매뉴얼 ①대로 `bitrate 50000`이다. 측정 시작 전 500000으로 잘못 설정된 적이
+있으나 프레임을 한 건도 주고받기 전에 정정했다(`RX/TX packets 0`에서 확인). 그 덕에
+드라이버 동력 차단 래치가 걸리지 않아 전원 재투입이 필요 없었다.
+
+### 14.2 발행 QoS — 여섯 토픽 모두 RELIABLE·VOLATILE
+
+| 토픽 | 신뢰성 | 내구성 | 발행 노드 |
+| --- | --- | --- | --- |
+| `/scan` | RELIABLE | VOLATILE | `rplidar_node` |
+| `/nvblox_node/static_map_slice` | RELIABLE | VOLATILE | `nvblox_node` |
+| `/camera/camera/depth/camera_info` | RELIABLE | VOLATILE | `camera` |
+| `/camera/camera/color/camera_info` | RELIABLE | VOLATILE | `camera` |
+| `/odom` | RELIABLE | VOLATILE | `ekf_filter_node` |
+| `/wheel/odom` | RELIABLE | VOLATILE | `encoder_feedback` |
+
+**`probes.yaml`이 lidar·카메라를 `sensor_data`(BEST_EFFORT)로 가정한 것과 다르다.**
+주석은 "센서 드라이버 기본값"이라고 적었으나 `rplidar_node`는 RELIABLE로 발행한다.
+
+통신은 깨지지 않는다. BEST_EFFORT 구독은 RELIABLE 발행자와 매칭된다(요청 ≤ 제공).
+반대 조합만 비호환이다. 따라서 **현재 설정은 안전한 쪽으로 틀렸다.** 임계값 확정 때
+`default`로 통일할지 결정한다.
+
+### 14.3 실효 주기와 센서 값 (15초 측정)
+
+| 토픽 | Hz | 값 | 판정 |
+| --- | --- | --- | --- |
+| `/scan` | 11.92 | 720점, 유효 81 %, 0.38~7.46 m | 정상 |
+| `/nvblox_node/static_map_slice` | 9.38 | frame=odom, 13056셀, 해상도 0.050 m | **계획서의 "정상 ~9 Hz" 확인** |
+| `depth/camera_info` | 30.01 | 640x480 | 정상 |
+| `color/camera_info` | 28.28 | 640x480 | 정상 |
+| `/camera/camera/imu` | 199.20 | \|가속도\| 9.63 m/s² | 정상(중력 9.81) |
+| `/imu/base_link` | 202.50 | frame=`base_link`, 9.63 m/s² | 변환 정상 |
+| `/odom` | **30.01** | — | 14.6 참조 |
+| `/wheel/odom` | **9.53** | — | **14.7 결함** |
+| `/cmd_vel_req` | 0건 | — | 주행 명령 없음(의도대로) |
+| `/cmd_vel_safe` | 30.02 | 전부 0 | Safety가 0을 꾸준히 발행 |
+| `/local_costmap/costmap` | 1.67 | 120x120, lethal 12.3 %, unknown 0 % | 정상 |
+| `/global_costmap/costmap` | **0건** | — | 14.10 참조 |
+
+`/scan` 11.92 Hz는 `probes.yaml`의 `max_hz: 12.0`에 **거의 닿아 있다.** 드라이버 보고값은
+10 Hz인데 실측이 더 높다. 이대로 두면 오탐이 난다.
+
+### 14.4 노드별 CPU — 최적화의 before
+
+| 노드 | 실측(top 3회) | 감시 노드 보고 | 일치 |
+| --- | --- | --- | --- |
+| `imu_base_link_adapter` | 40.0 / 48.3 / 45.5 → **약 45 %** | **0.0 %** | **불일치** |
+| `ekf_node` | 13.3 / 10.4 / 11.5 → 약 11.7 % | 10.6 % | 일치 |
+| `controller_server` | 10.1 % | 9.4 % | 일치 |
+| `mdrobot_can_keyboard_knob_node` | 11.4 % | 10.8 % | 일치 |
+| `nvblox_node` (Docker) | 25.9 % | (프로브 없음) | — |
+| `realsense2_camera_node` (Docker) | 37.4 % | (프로브 없음) | — |
+
+**`imu adapter`의 before는 약 45 %다.** 계획서가 적어 둔 38.6 %보다 높다.
+
+### 14.5 발견 1 — `process_cpu`가 껍데기 프로세스를 잰다 `[결함]`
+
+감시 노드가 `imu_adapter`를 **0.0 %**로 보고했다. 실제는 45 %다.
+
+```text
+pid 60999  /bin/bash -c ... imu_base_link_adapter ...      0.0 %   ← 감시 노드가 고른 것
+pid 61069  ros2 run vica_sensor_adapters imu_base_link_...  0.1 %
+pid 61085  .../vica_sensor_adapters/imu_base_link_adapter  45.5 %  ← 진짜 노드
+```
+
+`cmdline_pattern`이 **부분 문자열 일치**라 실행 노드뿐 아니라 그것을 띄운 셸과 `ros2 run`
+런처까지 걸린다. 그중 하나를 고르는데 진짜 노드가 아니었다.
+
+**셸 래핑은 이 세션의 실행 방식 탓이지만 `ros2 run` 런처는 아니다.** 터미널에서 매뉴얼대로
+띄워도 런처 프로세스가 남아 같은 패턴에 걸리며, 그쪽 PID가 더 작다. 재현되는 결함이다.
+
+다른 세 프로브가 맞은 것은 launch로 띄워 래퍼가 같은 이름을 갖지 않았기 때문이다.
+
+**영향이 크다. 이번 측정의 목적 자체가 이 값이었고 0 %로 기록될 뻔했다.** 감시 도구가
+오류 없이 틀린 값을 내는 사례이므로 13.6에 적어 둔 "약한 신호"보다 우선순위가 높다.
+
+수정 방향(아직 적용하지 않음): 실행 파일 이름(`comm`)으로 좁히거나, 후보 중 셸·런처를
+제외하거나, 여러 개 걸리면 진단에 그 사실을 남긴다. **후보가 2개 이상인데 조용히 하나를
+고르는 현재 동작이 문제다.**
+
+### 14.6 발견 2 — EKF는 30 Hz 미달이 아니다 `[전제 정정]`
+
+계획서와 `probes.yaml` 주석이 **"EKF 30 Hz 미달"**을 baseline 전제로 적었다.
+**실측 `/odom` = 30.01 Hz다.** `ekf.yaml`의 `frequency: 30`대로 정확히 나온다.
+
+"미달"이라는 서술의 근거가 무엇이었는지 이 문서에 없다. 다른 조건에서 측정했거나
+`/wheel/odom`(14.7)과 혼동했을 수 있다. **최적화 대상 목록에서 이 항목을 빼야 한다.**
+
+### 14.7 발견 3 — `/wheel/odom`이 9.53 Hz다
+
+`probes.yaml`의 `min_hz: 20.0`에 크게 못 미친다. 감시 노드도 `Frequency too low`로 잡았다.
+
+EKF는 30 Hz로 도는데 **바퀴 정보는 9.5 Hz로만 들어온다.** 나머지는 IMU와 예측으로 채운다.
+
+두 해석이 가능하며 아직 판정하지 않았다.
+
+- `encoder_feedback`이 실제로 느리다 → 개선 대상
+- 20 Hz라는 임계값이 근거 없이 정해졌다 → 임계값 수정 대상
+
+`probes.yaml` 주석 자체가 이 값을 `[미검증]`으로 적어 두었다. **임계값 확정 작업에서
+encoder 발행 주기의 설계값부터 확인한다.**
+
+### 14.8 발견 4 — 정지 상태인데 EKF yaw가 11° 틀어져 있다 `[미검증]`
+
+```text
+/wheel/odom   yaw = +0.0°     위치 (0.000, 0.000)
+/odom         yaw = +11.0°    위치 (0.000, 0.000)
+```
+
+**바퀴를 띄운 채 한 번도 움직이지 않았는데** 11도 차이가 난다. 위치는 둘 다 원점이다.
+
+IMU 적분 드리프트로 보이나 초기 정렬값일 가능성도 있어 단정하지 않는다. 확인 방법은
+기동 직후와 일정 시간 뒤의 `/odom` yaw를 비교하는 것이다. **드리프트라면 정지 중에도
+누적되므로 위치추정에 직접 영향을 준다.**
+
+### 14.9 E-stop 래치가 설계대로 종단 동작했다
+
+의도한 시험은 아니었으나 전 구간이 로그에 남았다.
+
+```text
+09:58:40  [FAULT] IDLE -> FAULT  source=motor_can_stale,physical_stale
+09:59:37  [WAIT RESET] FAULT -> ESTOP_RELEASED_WAIT_RESET  estop=True source=none
+10:07:37  [ESTOP LATCH CLEARED] -> CLEARED
+10:07:37  [SAFETY READY] ESTOP_ACTIVE -> READY_TO_GO  estop=False reset_armed=True
+```
+
+**가운데 줄이 핵심이다.** 원인이 전부 사라진(`source=none`) 뒤에도 래치를 스스로 풀지
+않고 관리자 reset을 기다렸다. `GOVERNANCE.md` 5절과 `CLAUDE.md`가 요구하는 동작이다.
+
+최초 래치 원인이 "모터 노드 미기동"이었다는 점도 기록해 둔다. 시스템은 *아직 안 켠 것*과
+*케이블이 빠진 것*을 구분할 수 없으므로 둘 다 정지로 처리한다. 켜는 순서 때문에 매번
+reset이 필요한 것은 이 설계의 정상적인 대가다.
+
+`app_emergency_node`가 기동 시 남긴 경고도 그대로다 —
+`Public /safety_reset is an unauthenticated maintenance [GAP]`. 관리자 인증은 여전히 `[GAP]`이다.
+
+### 14.10 부수 관찰
+
+**Docker `/proc` 가시성 — 보인다.** 10절이 "안 보이면 미구성 처리 확정"으로 열어 둔
+항목이다. `nvblox_node`(pid 59758)와 `realsense2_camera_node`(pid 56081) 모두 호스트
+`pgrep`·`ps`에 잡히고 CPU도 읽힌다. PID 네임스페이스는 계층 구조라 호스트가 컨테이너
+프로세스를 본다. **두 노드에 `process_cpu` 프로브를 추가할 수 있다.**
+
+**aggregator 트리 정상.** `/VICA/Hardware/{LiDAR,Motor,Perception,SmartHandle}`,
+`/VICA/{App,Computer,Localization,Monitor,Navigation,Safety,Voice,Other}`가 모두 구성됐다.
+
+**`/global_costmap/costmap`이 0건이다** `[미검증]`. `/local_costmap`은 1.67 Hz로 나온다.
+`amcl`은 `active [3]`이다. AMCL 초기 위치를 찍지 않아서일 가능성이 높으나 확인하지 않았다.
+
+**스마트 핸들.** `turn_guide_node`·`user_guidance_driver_node` 정상 기동, 시리얼
+(`/dev/vica_smart_handle` → FTDI `ttyUSB0`) 연결됨. 다만 `guidance` 컴포넌트는
+`observable: false`이므로 `/robot/health`에서는 여전히 `UNKNOWN`이다 — 상향 통신이 없어
+서보·LED가 실제로 동작했는지 확인할 수 없다는 설계 그대로다.
+
+**DDS 공유메모리.** 점검 중 `ros2 lifecycle get`이 `/map_server`에서 응답하지 않아
+타임아웃으로 죽였다. `/dev/shm`의 fastrtps 세그먼트가 145개까지 늘었다. 노드 조회는
+계속 정상이었으나 **이 명령은 이 장비에서 쓰지 않는다.** Nav2 상태는 감시 노드의
+`Nav2 Health` 진단으로 대신 본다.
+
+### 14.11 이 측정으로 확정되지 않은 것
+
+- `probes.yaml`·`required_components.yaml` 임계값은 **여전히 전부 `[미검증]`이다.**
+  14.5의 오측정을 고치기 전에는 CPU 임계값을 정할 수 없다.
+- **"정상일 때 `READY(2)`로 올라가는가"는 이번에도 완전히 확인하지 못했다.**
+  `motor`·`lidar`·`perception`은 정상 판정을 받았으나 `localization`은 14.7 때문에
+  `Frequency too low`, `navigation`은 `Nav2 is inactive`였다.
+- 2차 fault injection은 하지 않았다.
