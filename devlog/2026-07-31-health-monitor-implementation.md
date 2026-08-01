@@ -510,20 +510,83 @@ install/nvblox_msgs/.../nvblox_msgs/msg/__init__.py
 실패**다. 이 장비에서 반복되는 함정이므로 Docker 빌드 산출물을 호스트에서 쓸 때마다
 링크 생존을 먼저 확인한다.
 
-`optional: true`라 어댑터는 계속 동작하지만 **slice stale 감지 자체가 없는 상태**다.
-`probes.yaml`의 nvblox 임계값은 이 상태에서 확정할 수 없다.
+`optional: true`라 어댑터는 계속 동작하지만 **slice stale 감지 자체가 없는 상태**였다.
+**13.7.1에서 해결했다.**
 
 10절 "Docker `/proc` 가시성" 항목과 별개 문제다. 그쪽은 프로세스 CPU, 이쪽은 메시지 타입
 가용성이다.
 
-**대응은 세 가지이며 아직 정하지 않았다.**
+### 13.7.1 해결 — 도커 `install/`은 애초에 쓸 필요가 없었다
 
-1. 호스트에서 `nvblox_msgs`만 빌드한다(소스가 호스트에 있으므로 가능). 메시지 전용
-   패키지라 가볍고, 감시 노드가 호스트에 남아 `/proc`을 계속 볼 수 있다
-2. 감시 노드를 컨테이너 안에서 띄운다. nvblox와 환경이 같아 확실하나 호스트 프로세스
-   CPU 관측이 달라져 다른 측정이 깨진다
-3. 프로브를 건너뛴 채 두고 slice Hz는 컨테이너 안에서 `ros2 topic hz`로 직접 잰다.
-   10절이 요구하는 것은 어차피 수동 측정이므로 1차 측정은 이대로 진행할 수 있다
+**이 문제는 프로젝트에 이미 해결책이 있었다.** `vica_ros2_ws/.gitignore` 64~69행과
+`vica_nvblox_bringup/README.md` 7절이 같은 방법을 적어 두었다. 도커의 `install/`을 쓰는
+것이 아니라 **소스를 우리 워크스페이스 `src/`에 symlink로 걸고 호스트에서 빌드**한다.
+
+원본 작업트리에는 그 symlink 3개가 있다. **worktree에는 없었다.**
+`.gitignore`가 이 셋을 제외하므로 `git worktree add`로 따라오지 않는다.
+
+```bash
+cd /home/ji_w/wt-monitor/src
+ln -s /home/ji_w/workspaces/isaac_ros-dev/src/isaac_ros_nvblox/nvblox_msgs nvblox_msgs
+cd /home/ji_w/wt-monitor && colcon build --packages-select nvblox_msgs
+```
+
+`isaac_ros_common`은 `package.xml`에만 있고 `CMakeLists.txt`가 `find_package`하지 않으므로
+링크하지 않았다. `nvblox_msgs`만으로 빌드된다(18.2s).
+
+**README와 달리 `--symlink-install`을 쓰지 않았다.** 파일이 실제로 복사되어 원본 위치에
+묶이지 않는다. 메시지 패키지는 자주 바뀌지 않으므로 개발 편의를 잃는 손해가 없다.
+
+결과:
+
+```text
+before: 5 topic probes, 4 process probes, 1 skipped
+after : 6 topic probes, 4 process probes, 0 skipped
+/diagnostics: perception: /nvblox_node/static_map_slice frequency topic status
+```
+
+`find install -xtype l` 결과 0건이다. **컨테이너는 건드리지 않았다.** 도커 설정 변경도
+nvblox 재빌드도 없다. 같은 `.msg`에서 빌드하므로 형식이 같아 통신에 영향이 없다.
+
+### 13.7.2 재발 방지 — 감시해야 할 테스트가 조용히 skip한다 `[TARGET]`
+
+`vica_nvblox_bringup/README.md`는 `vica_nav2`의 `test_nvblox_dependency_contract`가 이
+상태를 감시한다고 적었다. 그러나 그 테스트는 이렇게 빠져나간다.
+
+```python
+pytest.skip("Isaac ROS nvblox 미설치 환경")
+```
+
+**symlink가 없는 상태가 바로 이 조건이다.** 링크가 빠져도 실패하지 않고 건너뛴다.
+감시하라고 만든 테스트가 이번 경우를 잡지 못했다.
+
+| 상황 | 현재 | 되어야 할 것 |
+| --- | --- | --- |
+| 이 장비에 nvblox 소스가 없다 | skip | skip (맞다) |
+| **소스는 있는데 `src/` 링크가 없다** | **skip** | **실패** |
+
+호스트에 `~/workspaces/isaac_ros-dev/src/isaac_ros_nvblox`가 있는지 먼저 보고, 있는데
+`src/nvblox_msgs`가 없거나 dangling이면 skip이 아니라 실패시킨다. 그러면 새 clone·새
+worktree에서 빌드 단계에 바로 걸린다.
+
+함께 쓸 점검은 한 줄이다. 아무것도 나오지 않아야 정상이다.
+
+```bash
+find <workspace>/install -xtype l
+```
+
+**이 수정은 `vica_nav2` 소관이고 이 브랜치 범위 밖이다.** 별도 작업으로 분리한다.
+
+### 13.7.3 남은 선택지 (지금은 불필요)
+
+`run_dev.sh`의 `-v $ISAAC_ROS_DEV_DIR:/workspaces/isaac_ros-dev`를
+`-v $ISAAC_ROS_DEV_DIR:$ISAAC_ROS_DEV_DIR`로 바꾸면 컨테이너 안팎의 경로가 같아져 dangling
+자체가 사라진다(232·288·293행 3곳. `core.py`는 `ISAAC_ROS_WS` 환경변수를 먼저 보므로
+232행만 맞추면 따라온다).
+
+**그러나 13.7.1로 도커 `install/`을 호스트에서 쓸 일이 없어졌으므로 지금은 하지 않는다.**
+전체 재빌드가 필요하고 `run_dev.sh`는 NVIDIA 업스트림 파일이라 업데이트 때 충돌한다.
+"도커에서 빌드한 것을 호스트에서 직접 써야 한다"는 요구가 실제로 생기면 그때 판단한다.
 
 ### 13.8 아직 검증하지 못한 것
 
