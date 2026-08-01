@@ -84,34 +84,56 @@ launch 인자에 경로를 넘길 때는 `$HOME`을 쓴다. `map:=~/경로` 형�
 
 ### 터미널 자동 배치 (Terminator)
 
-터미널을 하나씩 열고 source하는 대신, 15칸을 한 번에 배치할 수 있다.
+터미널을 하나씩 열고 source하는 대신, 용도별 배치를 한 번에 띄울 수 있다.
 
 ```bash
-python3 ~/VICA-smarthandle/scripts/vica_terminator_layout.py   # 레이아웃 생성(최초 1회)
-terminator -l vica                                             # 실행
+python3 ~/VICA-smarthandle/scripts/vica_terminator_layout.py   # 네 레이아웃 생성(최초 1회)
+terminator -l vica                                             # 주행 전체
 ```
 
 생성기는 터미널별 rc 파일(`~/.config/vica-terminator/`)과 Terminator 레이아웃을 만든다.
 기존 `~/.config/terminator/config`는 타임스탬프를 붙여 백업한다.
 
-모든 칸이 `~/.bashrc` → ROS 2 → `vica_ros2_ws` source와 통신 환경변수 설정까지 마친
+모든 칸이 `~/.bashrc` → ROS 2 → 운영 워크스페이스 source와 통신 환경변수 설정까지 마친
 상태로 열린다. 음성 두 칸만 `vica-voice-llm`으로 이동한다.
+
+| 프로파일 | 레이아웃 | 칸 | 용도 |
+| --- | --- | --- | --- |
+| full | `vica` | 20 | ⓪~⑬ 전체와 조작·점검 칸 |
+| drive | `vica_drive` | 18 | ⑫⑬ 음성만 뺀 주행. 앱·CLI로만 목적지를 넣을 때 |
+| app | `vica_app` | 8 | 앱·안전·감시 종단 검증. 라이다·카메라·Nav2 없음 |
+| sensor | `vica_sensor` | 8 | 센서·인지·감시만. CAN도 모터도 올리지 않는다 |
+
+`--list`로 각 프로파일의 열 구성과 그 조합을 고른 근거를 볼 수 있고, `--dry-run`은
+config를 건드리지 않고 무엇을 만들지만 보여준다. 지도가 바뀌면 `--map-id`로 넘긴다.
+
+`vica` 프로파일의 열 배치는 왼쪽부터 기동 순서다.
 
 | 열 | 터미널 |
 | --- | --- |
-| 1열 센서·안전 | display · lidar · safety · imu **(자동 실행)** / motor |
-| 2열 Docker·주행 | d455 · nvblox · nav2 · mission · app |
-| 3열 음성·조작 | llm+tts · stt · goto · reset · teleop |
+| 1열 준비·안전 | ⓪ power · ① can1 / ② display · ③ lidar · ④ safety **(자동 실행)** |
+| 2열 구동·인지 | ⑤ motor · ⑥ d455 / ⑦ imu **(자동 실행)** / ⑧ nvblox · ⑨ nav2 |
+| 3열 임무·앱·감시 | ⑩ mission · ⑪ app · ⑪-1 monitor · goto · reset |
+| 4열 음성·점검 | ⑫ llm+tts · ⑬ stt · check · teleop · shell |
 
-- **자동 실행**은 바퀴를 움직이지 않는 4칸(display·lidar·safety·imu)뿐이다.
-- 나머지 11칸은 명령을 `history`에 넣어두고 대기한다. **위 화살표 한 번 + Enter**로
+- **자동 실행**은 바퀴를 움직이지 않고 순서 의존성도 없는 4칸(display·lidar·safety·imu)
+  뿐이다. 나머지는 명령을 `history`에 넣어두고 대기한다. **위 화살표 한 번 + Enter**로
   실행하며, 각 칸 상단에 단계 번호와 주의사항이 표시된다.
 - 순서 의존성이 있는 단계(Docker 카메라 → nvblox → Nav2)와 바퀴가 도는 단계는 자동으로
   두지 않는다. §5의 순서를 사람이 통제한다.
+- **① can1 칸은 링크를 자동으로 건드리지 않는다.** 현재 상태만 읽어서 보여주고, 설정
+  명령은 사람이 눌러야 나간다. 상태 출력에 `state UP`이 보이면 누르지 않는다 — §11의
+  "실행 중인 `can1`을 임의로 down/up하지 않는다"가 그 이유다.
+- ⓪·① 처럼 `sudo`가 필요한 칸은 스크립트가 대신 실행하지 않는다. 그 칸에서 직접 친다.
+- `⑪-1 monitor` 칸은 `vica_system_monitor`가 운영 빌드에 없으면 `~/wt-dev` 같은 worktree
+  빌드를 overlay로 덧씌우고 어디서 가져왔는지 표시한다. 못 찾으면 경고만 남긴다.
+- `shell` 칸은 source가 끝난 자유 터미널이다. 임시 확인 때문에 다른 칸을 `Ctrl+C`로
+  끊으면 그 단계가 내려가므로 이 칸을 쓴다.
 - `teleop` 칸은 `[TEST ONLY]`다. `/cmd_vel`을 `/cmd_vel_req`로 remap해 Safety를 거치며,
   Nav2 주행 중에는 명령이 충돌하므로 쓰지 않는다.
 
-배치·자동 여부를 바꾸려면 스크립트의 `COLUMNS`만 고치고 다시 실행한다.
+칸을 더하거나 배치를 바꾸려면 스크립트의 `build_terms()`와 `PROFILES`를 고치고 다시
+실행한다.
 
 ## 4. 음성·LLM 최초 1회 준비
 
