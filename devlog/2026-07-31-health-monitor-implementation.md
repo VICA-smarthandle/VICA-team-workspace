@@ -259,6 +259,9 @@ CAN 격리는 `docs/superpowers/specs/2026-07-27-motor-can-health-design.md` 6.2
 
 ## 12. 다음 세션 재개 지점 (2026-07-31 종료 시점)
 
+> **이 절의 ①~④는 2026-08-01 Jetson에서 완료했다. 13절을 먼저 읽는다.**
+> 아래 "남은 것"과 "Jetson 첫 세션이 할 일"은 그날의 계획으로 남겨 둔 기록이다.
+
 ### 브랜치 상태 — **push 완료**
 
 | 저장소 | 작업 브랜치 | 원격 |
@@ -358,3 +361,156 @@ ros2 launch vica_system_monitor system_monitor.launch.py
 - **Draft PR을 열 것인가.** 노트북 검증이 끝나 열어도 되는 상태다. 본문은
   `GOVERNANCE.md` 8절 항목(목적·범위, 영향 계약, Safety 영향, 수행/미수행 검증,
   문서 갱신, rollback)을 채운다. 아직 안 열었다.
+
+## 13. Jetson 첫 세션 (2026-08-01) — ①~④ 완료, 측정 미실시
+
+12절의 "Jetson 첫 세션이 할 일" ①~④를 실행했다. **1차 측정(10절)은 아직 하지 않았다.**
+로봇 스택을 켜지 않은 상태에서 감시 계층만 검증한 기록이다.
+
+장비: `Z-jet`, Jetson Orin NX, `Linux 5.15.148-tegra`, `aarch64`.
+
+### 13.1 ① 코드 받기 — Jetson에서도 worktree를 썼다
+
+12절은 worktree를 "노트북 한정"으로 적었으나 **Jetson도 같은 조건이었다.**
+`vica_ros2_ws`가 `nav2-plannerhybrid-change`로 체크아웃되어 있고
+`src/vica_description/rviz/urdf.rviz`에 미커밋 수정이 있었다. 브랜치를 바꾸면 진행 중인
+Nav2 튜닝 작업을 침범하므로 worktree로 분리했다.
+
+```bash
+git -C vica_ros2_ws worktree add /home/ji_w/wt-monitor integration/app-ui-system-monitor
+```
+
+경로는 12절 예시의 `/tmp/wt-monitor` 대신 `/home/ji_w/wt-monitor`를 썼다. 빌드 산출물이
+들어가므로 `/tmp` 정리에 영향받지 않게 한다.
+
+최상위는 `docs/system-monitor`, `VICA_Supervisor`는 `integration/app-ui-system-monitor`로
+`switch`했다(둘 다 clean이었다).
+
+**두 작업 브랜치의 관계 — 충돌 없음.**
+
+| 항목 | 값 |
+| --- | --- |
+| `origin/dev` tip | `00ac412` |
+| `nav2-plannerhybrid-change` | `dev` +8 커밋, -0 커밋 (fast-forward 가능) |
+| `integration/app-ui-system-monitor` | `dev` +7 커밋, -0 커밋 |
+| 공통 조상 | `00ac412` (= `dev` tip) |
+| **변경 파일 교집합** | **0개** |
+
+12절이 확인한 것은 `feat/home-return`과의 호환성이었다. `nav2-plannerhybrid-change`는
+그때 대상이 아니었으므로 이번에 따로 확인했다.
+
+### 13.2 ② 의존 설치
+
+`ros-humble-diagnostic-aggregator` `4.0.7-1jammy.20260605.153743` 설치 완료.
+설치 직후 확인이 apt 완료보다 앞서 "미설치"로 잘못 판정된 적이 있다. `dpkg -l`이 아니라
+`ls -d /opt/ros/humble/share/diagnostic_aggregator`와 설치 시각으로 확인하는 편이 확실하다.
+
+### 13.3 ③ ARM64 빌드·테스트 — 통과
+
+```text
+vica_interfaces        21.5s
+vica_system_monitor     1.85s
+colcon test-result:  188 tests, 0 errors, 0 failures, 1 skipped
+```
+
+12절 기대값(188건, skip 1)과 정확히 일치한다. **ARM64 고유 문제는 없었다.**
+
+### 13.4 ④ 감시 노드 단독 기동 — 통과
+
+3노드 기동. aggregator가 파라미터 55개를 읽어 트리를 구성했다.
+
+```text
+/VICA/App  /VICA/Computer  /VICA/Localization  /VICA/Monitor
+/VICA/Navigation  /VICA/Safety  /VICA/Voice  /VICA/Other
+/VICA/Hardware/{LiDAR, Motor, Perception, SmartHandle}
+```
+
+로봇 스택을 켜지 않은 상태의 `/robot/health`다.
+
+```text
+state: 3 (STOPPED)          active_fault_count: 7
+motor 1  safety 1  localization 1  navigation 1  lidar 1  perception 1
+guidance 0  voice 0  app 0
+```
+
+| 결함 | 등급 |
+| --- | --- |
+| `lidar` `DIAG_COMPONENT_ERROR` | 3 |
+| `localization` `LOCALIZATION_TF_STALE` | 3 |
+| `motor` `DIAG_COMPONENT_STALE` | 3 |
+| `navigation` `NAV2_NOT_ACTIVE` | 3 |
+| `safety` `DIAG_COMPONENT_STALE` | 3 |
+| `safety` `SAFETY_STATE_STALE` | 3 |
+| `perception` `DIAG_COMPONENT_ERROR` | 2 |
+
+**3상태 설계가 의도대로 동작했다.** `READY(2)`로 보고된 컴포넌트가 하나도 없다.
+관측 수단이 없는 셋(`guidance`·`voice`·`app`)만 `UNKNOWN(0)`이며 결함으로 올리지 않았다.
+이는 `required_components.yaml`의 `observable: false` 셋과 정확히 일치한다.
+
+### 13.5 aggregator 없이 띄우면 거짓 초록불이 뜬다 `[미검증]`
+
+②를 기다리는 동안 `enable_aggregator:=false`(launch가 제공하는 단독 디버깅 모드)로 먼저
+띄웠더니 **로봇 스택이 하나도 없는데 `motor`·`safety`가 `READY(2)`로 나왔다.** 동시에
+`SAFETY_STATE_STALE`("한 번도 수신하지 못했습니다")이 활성이었다 — 서로 모순이다.
+
+**aggregator를 붙인 정상 구성에서는 재현되지 않았다**(13.4). aggregator가 등록됐지만
+나타나지 않은 항목에 `Missing`을 발행하기 때문이다. 즉 디버그 모드 한정 현상이다.
+
+다만 이 모드는 launch가 공식 제공하는 경로이므로 남겨 둔다. 이 모드로 본 초록불을
+판정 근거로 쓰면 안 된다.
+
+### 13.6 `process_cpu` 프로브의 약한 신호 `[미검증]`
+
+`process_cpu`는 프로세스를 못 찾으면 "프로세스를 찾지 못했습니다 (미구성 또는 미실행)"를
+**OK 등급**으로 낸다(`probes.yaml` 주석의 의도대로다 — 미구성은 결함이 아니다).
+
+그 결과 Nav2가 전혀 없는데도 집계 계층에서 이렇게 나왔다.
+
+```text
+/VICA/Navigation => OK
+  └ external_diagnostics_node: navigation: controller_server cpu
+      => 프로세스를 찾지 못했습니다 (미구성 또는 미실행)
+```
+
+**최종 판정은 맞았다.** 모니터가 `/bt_navigator` lifecycle을 따로 폴링해
+`NAV2_NOT_ACTIVE`를 올렸고, `motor`도 `CAN link => Missing`이 따로 있었다.
+그러나 **맞은 이유가 다른 경로 덕분이다.**
+
+어떤 컴포넌트의 진단이 `process_cpu` 하나뿐이면 그 컴포넌트는 조용히 OK가 된다. 지금
+해당하는 컴포넌트는 없다. **프로브를 추가할 때 걸릴 수 있는 함정이므로 기록만 해 둔다.**
+수정은 1차 측정과 임계값 확정 뒤에 판단한다 — 지금 코드를 바꾸면 측정값이 임계값 때문인지
+코드 수정 때문인지 분리할 수 없다(11절이 nvblox slice 방어를 미룬 논리와 같다).
+
+### 13.7 nvblox 프로브는 호스트에서 건너뛴다
+
+어댑터 기동 로그가 `5 topic probes, 4 process probes, 1 skipped`다. skip 1건은
+`nvblox_slice`이며 원인은 `nvblox_msgs`를 import할 수 없어서다.
+
+```text
+/opt/ros/humble/share/nvblox_msgs        없음
+/home/ji_w/workspaces/isaac_ros-dev/install/nvblox_msgs   있음
+```
+
+`nvblox_msgs`는 Isaac ROS overlay에 있다. **호스트에서 감시 노드를 그냥 띄우면 nvblox
+slice를 볼 수 없다.** `optional: true`라 어댑터는 계속 동작하지만, slice stale 감지
+자체가 없는 상태가 된다.
+
+10절 "Docker `/proc` 가시성" 항목과 별개 문제다. 그쪽은 프로세스 CPU, 이쪽은 메시지 타입
+가용성이다. **1차 측정 때 overlay를 source해서 띄울지 결정해야 한다.**
+
+### 13.8 아직 검증하지 못한 것
+
+- **정상일 때 `READY(2)`로 올라가는가.** 13.4가 확인한 것은 "안 떠 있을 때 초록불을 띄우지
+  않는다"는 한 방향뿐이다. 반대 방향은 로봇 스택을 켜야 볼 수 있다.
+- **10절 1차 측정 전부.** QoS·실주기·`imu adapter` CPU·EKF 실효 Hz·Docker `/proc` 가시성.
+- `probes.yaml`·`required_components.yaml`의 임계값은 여전히 전부 `[미검증]`이다.
+
+### 13.9 다음 순서
+
+1. **1차 측정(10절)** — `imu adapter` CPU와 EKF 실효 Hz는 최적화의 유일한 before다.
+   EKF baseline은 `/wheel/odom`을 입력으로 받으므로 **모터 노드(CAN)가 필요하다.**
+   바퀴를 띄우고 물리 E-stop을 확보한 뒤 읽기 전용으로만 측정한다.
+2. `probes.yaml` 임계값 확정
+3. 13.6 `process_cpu` 처리 결정
+4. 2차 fault injection (별도 승인)
+5. `error_source` 기본값 `health` 전환 (별도 커밋)
