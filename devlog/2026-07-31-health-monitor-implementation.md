@@ -898,11 +898,72 @@ reset이 필요한 것은 이 설계의 정상적인 대가다.
 계속 정상이었으나 **이 명령은 이 장비에서 쓰지 않는다.** Nav2 상태는 감시 노드의
 `Nav2 Health` 진단으로 대신 본다.
 
-### 14.11 이 측정으로 확정되지 않은 것
+### 14.11 `probes.yaml` 임계값 확정 — `6b27905`
 
-- `probes.yaml`·`required_components.yaml` 임계값은 **여전히 전부 `[미검증]`이다.**
-  14.5의 오측정을 고치기 전에는 CPU 임계값을 정할 수 없다.
-- **"정상일 때 `READY(2)`로 올라가는가"는 이번에도 완전히 확인하지 못했다.**
-  `motor`·`lidar`·`perception`은 정상 판정을 받았으나 `localization`은 14.7 때문에
-  `Frequency too low`, `navigation`은 `Nav2 is inactive`였다.
+14.5를 고쳐 CPU 값이 신뢰할 수 있게 된 뒤 임계값을 확정했다.
+
+| 항목 | 전 | 후 | 근거 |
+| --- | --- | --- | --- |
+| `/wheel/odom` `min_hz` | 20.0 | **5.0** | 실측 9.53. 아래 참조 |
+| `/scan` `max_hz` | 12.0 | 15.0 | 실측 11.92로 0.1 Hz 차이였다 |
+| `imu_adapter` `warn` | 60.0 | 55.0 | baseline 43.6 |
+| `ekf_node` `warn` | 60.0 | 20.0 | baseline 11.0 |
+| `motor_node` `warn` | 60.0 | 25.0 | baseline 10.4 |
+| `controller_server` `warn` | 90.0 | **90.0 유지** | 9.4는 Nav2 미활성 값이다 |
+| `nvblox_node` | — | **신규** `warn 50` | baseline 25.9 (Docker) |
+| `realsense_node` | — | **신규** `warn 60` | baseline 37.4 (Docker) |
+
+**`/wheel/odom`이 가장 중요한 수정이다. 기존 값으로는 로봇이 주차만 하면 영구 오탐이었다.**
+
+`min_hz: 20.0`의 근거를 추적하니 `encoder.yaml`의 `request_hz: 20.0`이었는데, 그 값은 바로
+위의 `request_position_feedback: false` 때문에 **적용되지 않는 벤치 전용 옵션**이다.
+
+실제 주기는 모터 노드의 C5 요청 빈도가 정한다. 그 노드는 30 Hz 루프마다 보내지 않고
+**RPM이 바뀌었을 때 또는 `resend_interval_sec`(0.05)에만** 보낸다. 정지 중에는 RPM이 계속
+0이라 재전송 경로만 남는다. **실측 CAN TX 14.9 Hz가 이 계산과 맞는다.**
+
+즉 9.53 Hz는 결함이 아니라 설계된 동작이며 **정지가 정상 운영의 하한**이다.
+
+`controller_server`만 조이지 않은 이유를 남긴다. 9.4 %는 **Nav2가 미활성일 때 잰 값**이라
+주행 중 부하를 모른다. 지금 조이면 첫 주행에서 오탐이 난다. **재지 못한 것을 조이지
+않는다.**
+
+`test_thresholds_are_marked_unverified_in_comments`를 둘로 나눴다. 측정 범위 밖인
+aggregator·components YAML은 `[미검증]` 표기를 계속 강제하고, `probes.yaml`은 실측 근거와
+**남은 미측정 항목**을 함께 적도록 강제한다. 근거 없이 값만 바뀌는 것과, 정지에서만
+쟀다는 사실을 숨긴 채 "확정"으로 적는 것을 둘 다 막는다. 테스트 199 → **200건, 실패 0**.
+
+### 14.12 "정상일 때 READY로 올라가는가" — 확인됨
+
+14.8까지 한 방향(안 떠 있을 때 초록불을 띄우지 않는다)만 검증돼 있었다. 임계값 확정 뒤
+로봇 스택을 켠 상태에서 **반대 방향이 확인됐다.**
+
+```text
+motor_readiness      2 (READY)      lidar_readiness       2 (READY)
+perception_readiness 2 (READY)
+safety_readiness     1              localization_readiness 1
+navigation_readiness 0 (UNKNOWN)    guidance/voice/app     0 (UNKNOWN)
+```
+
+프로브는 `6 topic probes, 6 process probes, 0 skipped`이며 토픽 프로브가 전부
+`Desired frequency met`이다.
+
+남은 결함 3건은 모두 원인이 확인된 기존 항목이다.
+
+| 결함 | 원인 |
+| --- | --- |
+| `LOCALIZATION_TF_STALE` | AMCL 초기 위치를 찍지 않았다. 이 장비에서 매번 수동이다 |
+| `NAV2_NOT_ACTIVE` | 위의 결과. lifecycle이 활성화되지 않는다 |
+| `safety` `DIAG_COMPONENT_STALE` | **safety 노드가 `/diagnostics`를 내지 않는다** |
+
+마지막 항목은 초안 17절 우선순위 표의 **5번**이며 아직 착수하지 않았다. `safety` 자체는
+정상 동작 중이다 — `/safety_state`는 `READY_TO_GO`이고 직접 구독 경로에는 결함이 없다
+(`SAFETY_STATE_STALE`이 없다). 없는 것은 **진단 발행**뿐이다.
+
+### 14.13 이 측정으로도 확정되지 않은 것
+
+- **주행 중 값 전부.** 측정은 정지 상태에서만 했다. `/wheel/odom` 주기와
+  `controller_server` CPU가 주행 중에 달라진다.
+- `required_components.yaml`과 `diagnostic_aggregator.yaml`은 여전히 `[미검증]`이다.
 - 2차 fault injection은 하지 않았다.
+- `imu_adapter` 45 %의 최적화(정적 TF 캐시)는 아직 하지 않았다. before는 확보됐다.
