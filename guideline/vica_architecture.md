@@ -56,6 +56,9 @@ LLM과 앱은 dependency·빌드·배포 주기가 다르므로 별도 저장소
 
 현재 `vica_user_guidance`, `vica_exploration` 패키지는 존재하지 않는다.
 
+`vica_system_monitor`(외부 대상 진단 어댑터와 전체 상태 모니터)는 **미머지 브랜치에만**
+있다. 13절이 그 계약을 정리하지만 `dev`의 패키지 수는 아직 12개다.
+
 ## 3. 전체 현재 구조
 
 ```text
@@ -135,6 +138,87 @@ float64 detected_at
 
 긴급어를 LLM보다 먼저 전달한다.
 
+#### `RobotFault`
+
+```text
+string component
+string fault_code
+uint8 severity          # OK=0, WARN=1, DEGRADED=2, STOP=3, FAULT=4
+bool active
+bool latched
+uint32 occurrence_count
+builtin_interfaces/Time first_seen
+builtin_interfaces/Time last_seen
+string detail
+string suggested_action
+```
+
+결함 하나를 표현한다. Header가 없는 순수 데이터라 `RobotHealth`와 `RobotEvent`가 그대로
+재사용한다.
+
+`detail`·`suggested_action`의 한국어 문구 **정본은 로봇 쪽 `fault_catalog.py`**다. 앱은
+받은 문구를 표시만 한다. 문구를 앱에 두면 로봇이 새 fault를 추가할 때마다 앱을 다시
+배포해야 하고 정본이 두 저장소로 갈라진다.
+
+`first_seen`·`last_seen`은 사람에게 보여줄 시각이므로 SYSTEM_TIME이다. 만료·신선도
+판정에는 쓰지 않는다. 그 판정은 STEADY_TIME 계약을 따른다(9.4절).
+
+**등급 축에 비상정지가 없다.** E-stop은 STOP보다 한 단계 심각한 것이 아니라 종류가
+다르다 — 래치가 걸리고, 관리자 reset이 있어야 풀리고, `emergency_stop_node`가 소유한다.
+그 사실은 `latched`와 `RobotHealth.state == ESTOPPED`가 나타낸다.
+
+| 축 | 답하는 질문 | 표현 |
+| --- | --- | --- |
+| `severity` | 얼마나 나쁜가 | OK … STOP, FAULT |
+| `latched` | 관리자 reset이 필요한가 | bool |
+| `RobotHealth.state` | 어떤 모드인가 | … STOPPED, **ESTOPPED** … |
+
+등급에 섞으면 진단 결함 하나가 "비상 정지"로 표시되어 관리자가 있지도 않은 버튼을
+찾는다. 폭주 억제 해제 조건도 등급이 아니라 `latched`를 본다 — 등급으로 판정했을 때
+모터 진단 미수신이 초당 한 건씩 알림을 냈다.
+
+이 분리로 "E-stop을 걸어야 할 만큼 심각"과 "주행만 막으면 됨"의 구분은 사라졌다.
+그 구분이 필요해지는 시점은 자동 복구(초안 11절 `[TARGET]`)이며, 그때는 **복구 정책
+필드**로 표현한다. 표시용 등급에 다시 싣지 않는다.
+
+#### `RobotHealth`
+
+```text
+std_msgs/Header header
+uint8 state             # STARTING=0, READY=1, DEGRADED=2, STOPPED=3, ESTOPPED=4, FAULT=5
+uint8 motor_readiness           # UNKNOWN=0, NOT_READY=1, READY=2
+uint8 safety_readiness
+uint8 localization_readiness
+uint8 navigation_readiness
+uint8 lidar_readiness
+uint8 perception_readiness
+uint8 guidance_readiness
+uint8 voice_readiness
+uint8 app_readiness
+uint16 active_fault_count
+uint8 highest_severity
+string primary_fault_code
+RobotFault[] active_faults
+```
+
+readiness는 bool이 아니라 **3상태**다. `UNKNOWN`은 "정상"이 아니라 **관측 수단이 없다**는
+뜻이다. Smart Handle은 아두이노에서 젯슨으로 올라오는 상향 경로가 없어 서보·LED·햅틱이
+실제로 동작했는지 확인할 방법이 없다(12절). 이것을 `READY`로 보고하면 관리자에게 잘못된
+안심을 준다. `SmartHandleState.msg`가 경고하는 실패 모드와 같다.
+
+`active_faults` 배열은 앱 재접속 복원용이다. 앱은 이 배열 하나로 현재 결함 전체를 복원한다.
+
+#### `RobotEvent`
+
+```text
+std_msgs/Header header
+RobotFault fault
+uint8 transition        # RAISED=0, ESCALATED=1, REMINDER=2, CLEARED=3
+```
+
+결함의 상태 전이만 발행한다. `event_id`는 두지 않는다 — 중복 판정 키는
+`component`+`fault_code`로 충분하고 목록 표시용 고유 id는 앱이 만든다.
+
 ### 4.2 핵심 topic·service·action
 
 | 인터페이스 | 타입 | 현재 producer | 현재 consumer | 상태 |
@@ -171,6 +255,10 @@ float64 detected_at
 | `/vica_safety/internal/supervisor_reset` | `Trigger` | app_emergency_node | Safety Supervisor | E-stop fresh/false·요청 명령 0 조건 |
 | `/robot_status` | JSON `String` | status app node | Flutter | 연결 가능 |
 | `/app_estop_state` | JSON `String` | app emergency node | Flutter | 중앙 E-stop·Safety 통합 상태, 앱 호환 `active` 유지 |
+| `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | motor node, `external_diagnostics_node`, health monitor | `diagnostic_aggregator` | 표준 개별 진단, 발행자 확대는 13.4절 순서 |
+| `/diagnostics_agg` | `diagnostic_msgs/DiagnosticArray` | `diagnostic_aggregator` | health monitor, `rqt_robot_monitor` | 계층형 진단 1 Hz, 실기 `[미검증]` |
+| `/robot/health` | `RobotHealth` | `robot_health_monitor_node` | Flutter, status app node | 1 Hz 상시 + 변화 시 즉시, 실기 `[미검증]` |
+| `/robot/events` | `RobotEvent` | `robot_health_monitor_node` | Flutter | 전이 시점 발행, 실기 `[미검증]` |
 
 ## 5. Voice·LLM 아키텍처
 
@@ -615,6 +703,7 @@ STT /voice_emergency_stop ──┘   ├─ source 상태·freshness 관리
 - rosbridge WebSocket 연결
 - 지도·장소 조회와 좌표 저장
 - `/robot_status` 기반 로봇 상태 표시
+- `/robot/health`·`/robot/events` 기반 세부 결함 표시(시스템 진단 화면, 대시보드 배너)
 - `/app_estop_state` 기반 앱 E-stop 표시
 - E-stop activate/reset service 호출
 - 진행 중 안내의 취소·일시정지·재개 요청(`MissionCommand` service 3종)
@@ -657,6 +746,22 @@ Mission Manager가 `/vica_goal_event`를 발행하도록 연결했으며 앱 표
 공용 topic이고 각 메시지가 그 발행자의 상태만 담으므로, 마지막 메시지 하나만 보관하면
 ERROR 발행자와 정상 발행자가 번갈아 도착할 때 오류 표시가 깜빡인다. 항목별로 누적하고
 확정·해제에 지연을 둔다.
+
+이 깜빡임 결함의 근본 해소는 판정 지점을 하나로 모으는 것이다. `robot_health_monitor_node`
+가 항목별 누적과 전이 판정을 전담하고, 앱 브리지는 그 결과를 받는다. 전환은
+`error_source` 파라미터로 감싼다.
+
+| `error_source` | 오류 판정 입력 | 상태 |
+| --- | --- | --- |
+| `diagnostics`(기본) | 기존 `/diagnostics` 직접 파싱 | `[CURRENT]` |
+| `health` | `/robot/health`의 `highest_severity >= STOP` | 코드 구현, 실기 `[미검증]` |
+
+기본값이 현재 동작이므로 패키지를 빌드해도 거동이 바뀌지 않는다. 실기에서 파라미터
+한 줄로 A/B한 뒤 기본값을 `health`로 바꾸는 것은 **별도 커밋**으로 한다. 롤백 단위가
+커밋이 아니라 파라미터다.
+
+`/robot_status` JSON 스키마는 바꾸지 않는다. 세부 결함 표시는 앱이 `/robot/health`·
+`/robot/events`를 rosbridge로 **직접** 구독해 담당하며 이 노드를 거치지 않는다.
 
 ### 10.3.1 안내 취소·일시정지·재개
 
@@ -808,7 +913,108 @@ stamp
 - 리코일 기반 보행 속도 추종은 guidance 계층이 아니라 motor node의 knob 속도 보정으로
   이미 구현되어 있다(9.1절).
 
-## 13. 현재 주요 위험과 우선순위
+## 13. 상태 감시 아키텍처
+
+설계 배경과 미확정 항목은 [`vica_system_health_monitoring_draft.md`](vica_system_health_monitoring_draft.md)가
+정본이다. 이 절은 확정된 계약과 **관측 범위 경계**만 담는다.
+
+### 13.1 두 경로 분리
+
+```text
+[진단성 정보]  motor node · external_diagnostics_node · health monitor 자신
+                     └─ /diagnostics ─→ diagnostic_aggregator ─→ /diagnostics_agg ─┐
+                                                                                   │
+[안전 신호]    /emergency_stop · /safety_state · TF map→base_footprint ────────────┤
+               /bt_navigator/get_state 폴링 · /vica/robot_state                     ▼
+                                                            robot_health_monitor_node
+                                                                       ▼
+                                                    /robot/health + /robot/events
+                                                                       ▼
+                                                          rosbridge ─→ Flutter
+```
+
+안전 신호는 aggregator를 거치지 않는다. `diagnostic_aggregator`는 기본 1 Hz로 집계하므로
+E-stop 표시가 최대 1초 늦는다. **진단성 정보는 표준 체인, 안전 상태는 직접 입력**이 이
+설계의 뼈대다.
+
+`robot_health_monitor_node`는 Safety Supervisor를 대체하지 않으며 모터 정지 경로에 들어가지
+않는다. 모니터가 죽어도 `/cmd_vel_req → Safety → /cmd_vel_safe → CAN` 경로는 그대로 동작한다.
+
+### 13.2 어댑터를 두는 이유
+
+`rplidar_ros`, nvblox(Docker), D455는 외부 패키지라 `/diagnostics`를 내지 않고 코드를 고칠
+수도 없다. `external_diagnostics_node`가 그 대상을 **대신해** 진단을 발행하므로 외부 대상도
+우리 노드와 같은 경로로 흐른다.
+
+부수 효과가 중요하다 — `nvblox_msgs` 같은 외부 타입 의존이 어댑터 프로세스에만 갇힌다.
+모니터는 센서 메시지 타입을 전혀 import하지 않고, 어댑터가 죽어도 모니터는 살아 있다.
+
+감시 도구가 스스로 오탐을 만들 수 있다는 점이 이 어댑터의 최대 위험이다. `/scan`을
+RELIABLE로 구독하면 rplidar가 sensor_data(BEST_EFFORT)로 발행할 때 QoS 비호환으로 한 건도
+받지 못해 `LIDAR_SCAN_STALE`이 영구 오탐된다. 따라서 구독 QoS를 `probes.yaml`에 두고
+실기 `ros2 topic info -v`로 확정하며, 어댑터는 "구독자는 붙었는데 메시지가 0건"을 진단
+message에 구분해 남긴다.
+
+### 13.3 관측 범위와 사각지대
+
+**"health가 정상이라고 했는데 왜 못 잡았나"를 구조적으로 막기 위해 경계를 문서에 고정한다.**
+어댑터가 대신 발행할 수 있는 것은 토픽과 `/proc`으로 이미 나오는 것뿐이다. 노드 내부 상태는
+그 노드를 수정하지 않으면 원리적으로 볼 수 없다.
+
+관측하는 것:
+
+| 신호 | 방법 |
+| --- | --- |
+| 모터 CAN 링크·cmd/knob age | motor node의 기존 `/diagnostics` |
+| `/scan` 주기 | 어댑터 topic_rate |
+| nvblox slice age·Hz | 어댑터 topic_rate |
+| depth·color `camera_info` 주기 | 어댑터 topic_rate |
+| `/odom` 실효 Hz (= EKF 실효 주기) | 어댑터 topic_rate |
+| `/wheel/odom` 미발행 | 어댑터 topic_rate |
+| 노드별 프로세스 CPU % | 어댑터 process_cpu (`/proc`) |
+| E-stop 래치·`/safety_state` | 모니터 직접 구독 |
+| TF `map→base_footprint` age | 모니터 직접 tf2 |
+| Nav2 lifecycle 상태 | 모니터 `GetState` 폴링 |
+
+관측하지 **못하는** 것:
+
+| 신호 | 왜 불가 | 실제 위험 |
+| --- | --- | --- |
+| 마이크 무입력 | 오디오 콜백 내부 | **긴급어 감시가 조용히 멈춘다** |
+| 긴급 감시 실효 hop·창 건너뜀 | 카운터가 아예 없다 | 긴급어 사각지대 확대 |
+| STT/TTS CPU 폴백 여부 | 노드 내부 변수, `print`로만 나감 | 폴백 시 지연 3.7배·10배 |
+| 목적지 카탈로그 부재 | warn 로그 한 줄. 간접 추정만 | 모든 안내가 `unknown_destination` |
+| Smart Handle 서보·LED·햅틱 실동작 | 상향 통신 경로 자체가 없다(12절) | readiness가 `UNKNOWN`으로 남는다 |
+
+카메라는 원본 `image`가 아니라 `camera_info`를 구독한다. 같은 주기지만 수백 바이트다.
+30 Hz depth 프레임을 복사하면 감시 노드가 대역폭 소비자가 된다.
+
+### 13.4 임계값과 확장 규율
+
+- **임계값과 기대 토픽 목록을 코드에 두지 않는다.** 전부 YAML이다. `probes.yaml`(수집
+  대상·기대 주기·구독 QoS), `diagnostic_aggregator.yaml`(분류·`timeout`·`expected`),
+  `required_components.yaml`(필수 여부·severity). timeout은 aggregator yaml만 소유한다 —
+  두 곳에 두면 어느 쪽이 이기는지 모호해진다.
+- **토픽 부재를 자동으로 fault로 만들지 않는다.** `publish_voxel_map: False`나 `backup`
+  behavior 제거처럼 토픽이 사라지는 것이 정상 변경일 수 있다. 부재 판정은 반드시 YAML의
+  `required` 플래그를 거친다.
+- **계약 테스트가 4파일의 이름 집합 일치를 강제한다.** 오타로 감시가 조용히 빠지는 것을
+  막는다. `vica_nav2/test/test_nav2_params_contract.py`와 같은 패턴이다.
+- **다른 노드에 진단을 추가할 때 모니터 코드를 고치지 않는다.** aggregator yaml에 항목만
+  추가하면 `DIAG_COMPONENT_ERROR`/`WARN`/`STALE` 통로로 앱까지 표시된다. 표준 체인을 먼저
+  깔아 두는 가장 큰 이유가 이것이다.
+- 진단 발행자 확대 우선순위는 초안 17절 1단계 표를 따른다. 1위가 마이크 무입력이다.
+  `safety_supervisor_node`·`emergency_stop_node` 수정은 E-stop 경로 전체 실기 재검증을
+  요구하므로 마지막이다.
+
+### 13.5 자동 복구는 범위 밖
+
+이 계층은 **관측과 보고만** 한다. `recovery_policy.yaml`과 자동 재시도는 초안 11절의
+`[TARGET]`으로 남는다. nvblox slice가 stale일 때 Mission을 취소하는 방어도 아직 없다 —
+감지는 구현했으나 방어는 유령 장애물 진단이 끝난 뒤 결정한다
+(`devlog/2026-07-30-nvblox-ghost-obstacle.md` 12절).
+
+## 14. 현재 주요 위험과 우선순위
 
 | 우선순위 | 문제 | 조치 |
 | --- | --- | --- |
@@ -822,9 +1028,11 @@ stamp
 | P1 | 통합 음성 출력 미검증 | `/vica/tts_request` 우선순위와 실제 마이크·스피커 검증 |
 | P1 | 앱 Mission 상세 상태 미연결 | 공통 mission status 계약 정의 |
 | P1 | 목적지 통합 runtime 미검증 | 지도별 YAML 저장·reload·음성 검색을 함께 검증 |
+| P1 | 상태 감시 임계값이 전부 실측 없이 정해져 있음 | Jetson에서 QoS·주기·CPU를 실측해 확정. 확정 전 결함 표시를 판정 근거로 쓰지 않는다(13.4절) |
+| P1 | 긴급어 감시의 마이크 무입력이 관측 불가 | `emergency_monitor.py`에 무입력 카운터와 진단 발행 추가(13.3절 표) |
 | P2 | Smart Handle 안내 미구현 | 메시지 → mock → bench → HIL 순서 구현 |
 
-## 14. 권장 통합 순서
+## 15. 권장 통합 순서
 
 1. 현재 토픽과 TF를 rosbag/읽기 전용 명령으로 확인한다.
 2. localization 의존성을 설치하고 확정된 `/wheel/odom + /imu/base_link → EKF → /odom` 계약을 깨끗한 환경에서 재검증한다.
@@ -839,7 +1047,7 @@ stamp
 11. 서보·LED MCU bench test를 수행한다.
 12. 전체 HIL 뒤 제한 구역 저속 주행을 수행한다.
 
-## 15. 공식 참고자료
+## 16. 공식 참고자료
 
 전체 공식 URL 목록과 버전 주의사항은 별도 유지 문서인 [`official_reference_urls.md`](official_reference_urls.md)를 기준으로 한다.
 
