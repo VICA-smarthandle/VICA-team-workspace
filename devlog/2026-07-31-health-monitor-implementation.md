@@ -1172,3 +1172,180 @@ robot_health_monitor_node   19.2 %
 `realsense2_camera_node` 37.4 %, `nvblox_node` 25.9 %다. 외부 패키지이며 GPU 경합 조사
 (`2026-07-30-gpu-nvblox-stt-contention.md`)와 함께 봐야 한다. 해상도·프레임레이트가
 주행 품질과 직결되므로 단독으로 낮추지 않는다.
+
+## 16. 앱 종단 검증 (2026-08-01, Jetson 실기)
+
+8-2에서 rosbridge까지만 확인했던 경로를 **관리자 앱 화면까지** 이었다. 이전에 보고된
+"앱에서 리셋해도 오류 상태가 해제되지 않는다"를 **머지된 빌드로 재검증**하는 것이 목적이다.
+
+### 16.1 구성
+
+`dev` 코드로 통일했다. `vica_ros2_ws` 본체는 `nav2-plannerhybrid-change`에 있어 건드리지
+않고, worktree `wt-dev`에서 `vica_safety`와 `mdrobot_can_control`을 빌드했다. 두 패키지는
+`git diff dev..nav2-plannerhybrid-change`가 비어 있어 브랜치 차이가 없음을 먼저 확인했다.
+
+```text
+rosbridge_server        9090
+vica_safety             emergency_stop_node / safety_supervisor_node / app_emergency_node
+vica_system_monitor     external_diagnostics_node / robot_health_monitor_node / aggregator
+mdrobot_can_control     keyboard_knob          (2단계에서 추가)
+앱                      build/linux/arm64/release/bundle/vica_supervisor  on DISPLAY=:1
+```
+
+**라이다·카메라·Nav2는 띄우지 않았다.** 그 결과 결함 7건이 그대로 떠서 **오류 표시를
+검증할 시험대가 공짜로 만들어졌다.** 모터는 바퀴를 띄운 상태에서만 올렸고 `rpm +0`을 확인했다.
+
+### 16.2 결과 — 보고된 결함은 재현되지 않았다
+
+앱은 결함을 표시했고(`주행 불가 · LIDAR` + `다른 결함 6건`), 리셋 거부 시 **이유까지**
+보여주었다.
+
+```text
+Safety reset 거부: step=estop_reset, reason=active sources: motor_can_stale
+```
+
+**"안 풀린다"가 아니라 "왜 못 푸는지 말하고 있었다."** 거부 자체가 설계대로다 —
+`EmergencyLatch.try_reset()`은 `active_sources`가 하나라도 있으면 거부한다.
+
+모터 노드를 올려 `/motor/can_ok=true`를 채우자 리셋이 수락되었다.
+
+```text
+821.83  [WAIT RESET]          FAULT -> ESTOP_RELEASED_WAIT_RESET  estop=True
+827.90  [ESTOP LATCH CLEARED] estop=False; supervisor remains locked
+827.93  [ESTOP CLEARED]       ESTOP_RELEASED_WAIT_RESET -> CLEARED
+827.94  [SUPERVISOR RESET]    state=READY_TO_GO /cmd_vel_req=zero
+827.95  [SAFETY READY]        ESTOP_ACTIVE -> READY_TO_GO reset_armed=True
+827.95  [RESET ACCEPTED]      -> READY_TO_GO
+```
+
+`/robot/health`가 따라 움직인 것이 종단 검증의 핵심이다.
+
+| | 리셋 전 | 리셋 후 |
+| --- | --- | --- |
+| `state` | 4 = ESTOPPED | **3 = STOPPED** |
+| `active_fault_count` | 7 | **5** |
+| `motor_readiness` | 1 = NOT_READY | **2 = READY** |
+
+사라진 2건은 `SAFETY_ESTOP_LATCHED`(래치)와 `motor DIAG_COMPONENT_STALE`이다.
+남은 5건은 lidar·localization·navigation·perception·safety로, **띄우지 않은 구성요소와
+정확히 일치한다.** 앱 → rosbridge → `app_emergency_node` → `emergency_stop_node` →
+래치 → `/robot/health` → 앱까지 한 바퀴가 닫혔다.
+
+### 16.3 확인된 설계 강점 — 물리 버튼은 CAN 직독이다
+
+`emergency_stop_node`는 `input_mode="can_f1"`로 `can1`을 **직접 열어** 드라이버 응답
+(`0x701`)의 F1 프레임을 읽는다. 모터 노드를 거치지 않는다.
+
+```text
+F1 data=F1 00 58 78 05 01 30 30  physical_estop=False
+can1  RX 1,301,466 packets  errors 0
+```
+
+그래서 모터 노드가 죽어 있어도 **물리 버튼 판정은 살아 있었다.** 거부 사유에
+`physical_stale`이 없고 `motor_can_stale`만 있었던 이유가 이것이다. 안전 입력이 상위
+노드의 생사에 의존하지 않는다는 뜻이며, 이 분리는 유지해야 한다.
+
+`is_fresh_ns()`가 미수신(`None`)을 `False`로 돌려 **fail-safe 쪽으로 닫히는 것**도
+같은 자리에서 확인했다. 0.0 sentinel을 금지한 주석이 실제로 지켜지고 있다.
+
+### 16.4 `[GAP]` safety 노드가 `/diagnostics`를 발행하지 않는다
+
+리셋이 성공해 `safety_state=READY_TO_GO`가 된 **뒤에도** 다음이 남았다.
+
+```text
+safety_readiness: 1   (NOT_READY)
+▸ safety | DIAG_COMPONENT_STALE | "진단이 갱신되지 않았습니다."
+```
+
+**Safety는 정상인데 앱에는 고장으로 보인다.** 감시 계층이 `/diagnostics`를 근거로
+판정하는데 `vica_safety`의 세 노드가 아무것도 발행하지 않아, 침묵이 곧 결함으로 읽힌다.
+
+이것은 12절 초안에서 우선순위 5로 적어 둔 항목이며 **2026-08-01 실기에서 확정됐다.**
+관리자 화면에 상시 거짓 경보가 뜨면 진짜 결함을 무시하게 되므로, 6절이 경고한
+"감시 도구가 스스로 오탐을 만든다"의 가장 나쁜 형태다. **다음 작업 1순위로 올린다.**
+
+### 16.5 `[GAP]` 거부 메시지가 관리자용이 아니다
+
+`reason=active sources: motor_can_stale`은 내부 식별자를 그대로 노출한다. 관리자는
+`motor_can_stale`이 무엇인지, 무엇을 해야 하는지 알 수 없다. 로그용 문자열과
+화면용 문장을 분리하고, 원인별로 조치를 한국어로 안내해야 한다.
+
+```text
+현재: reason=active sources: motor_can_stale
+필요: "모터와의 통신이 끊겼습니다.
+       모터 드라이버 전원과 CAN 연결을 확인한 뒤 다시 시도해 주세요."
+```
+
+`physical_stale`, `app`, `voice`도 같은 표가 필요하다. 16.4를 고친 뒤 이어서 한다.
+
+## 17. `can1` 두절과 복구를 실측했다 (2026-08-01)
+
+16절 도중 사용자가 "모터 노드는 죽어도 다시 실행하면 되던데"라고 지적했고, 그때까지
+"`can1`을 내리면 드라이버 전원을 재투입해야 한다"고 안내하던 것이 과했음이 드러났다.
+바퀴를 띄운 상태에서 직접 쟀다.
+
+### 17.1 대조군
+
+물리 비상정지 해제, 중앙 래치 해제, 게이트 `READY_TO_GO` 상태에서 `/cmd_vel_req`에
+0.05 m/s를 2초 발행했다. 발행만 하고 "돌았다"고 잘못 보고한 이력이 있어 사전 점검을
+먼저 넣었다(`/cmd_vel_req` 구독자 1, `/cmd_vel_safe` 발행자 1).
+
+```text
+rpm MOT1/R= +7, MOT2/L= +7      (정지 시 +0)
+```
+
+### 17.2 `can1` 2초 두절 — `up`만으로는 복구되지 않는다
+
+```text
+sudo ip link set can1 down ; sleep 2 ; sudo ip link set can1 up
+  -> RTNETLINK answers: Connection timed out
+  -> can1  state STOPPED,  수신 0 바이트
+  -> 재시도해도 같음
+```
+
+**2초면 충분했다.** CAN은 보낸 프레임을 다른 노드가 ACK해야 성립하는데, 드라이버가
+조용해진 뒤로는 젯슨 컨트롤러가 기동에 실패한다. 물리 버튼 상태와 무관했다
+(버튼 해제 상태에서 확인).
+
+### 17.3 복구는 전원이 아니라 인터페이스 재설정이다
+
+```bash
+sudo ip link set can1 type can bitrate 50000 berr-reporting on restart-ms 100
+sudo ip link set can1 up
+```
+
+이것으로 그 자리에서 복구됐다. `state ERROR-ACTIVE`, 수신 재개, **motor node를
+재시작하지 않았는데 knob이 48 %로 정상 복귀**했다.
+
+knob이 돌아온 것 자체가 드라이버가 재부팅되지 않았다는 증거다 — 재부팅했다면 F1
+monitor 방송(`0x55`)이 꺼진 채 남고, motor node는 그 명령을 생성자에서만 보내므로
+knob이 영영 올라오지 않는다. 사용자도 전원을 만지지 않았다고 확인했다.
+
+**따라서 2026-07-27의 "드라이버 전원을 완전히 껐다 켜야 한다"는 기록을 정정한다.**
+먼저 재설정을 시도하고, 그래도 안 되면 전원을 본다. 매뉴얼 ①절에 근거와 함께 적었다.
+
+### 17.4 함께 확인된 것 둘
+
+**운행 중 CAN이 끊기면 바퀴는 스스로 멈춘다.** 물리 버튼 없이도 그랬다. 드라이버의
+`PID_COM_WATCH_DELAY` 0.5초가 실제로 작동한다.
+
+이것이 사용자 운용 습관의 근거를 설명한다. 사용자는 **항상 물리 비상정지를 누른 채로
+전원을 넣는데**, 그 이유는 "드라이버에 전원이 들어왔는데 `can1`도 motor node도 없으면
+모터가 스스로 돈다"는 것이다. 즉 **위험한 구간은 운행 중 두절이 아니라 전원 투입 직후**,
+드라이버가 CAN 제어를 한 번도 받지 못한 때다. 이 로봇에는 토크를 끊는 저수준 하드웨어
+장치가 없고(`vica_architecture.md`의 "전원·토크 차단 E-stop은 별도로 필요하다",
+`emergency_stop_node`가 기동마다 남기는 "does not replace hardware torque removal"),
+물리 버튼은 드라이버 IO 입력이라 펌웨어가 세우는 방식이다.
+
+**motor node는 죽지 않았다.** `[CAN FAULT] phase=send ... Network is down; 출력을 0으로
+유지합니다`를 남기며 속도 상한을 `(0.00 m/s, 0.00 rad/s)`로 내린 채 살아 있었다.
+2026-07-28의 크래시 수정이 실기에서 유효함을 확인한 것이다.
+
+### 17.5 이 결과가 바꾸는 것
+
+`scripts/vica_terminator_layout.py`의 모터 칸이 `can_set && ros2 launch ...`였다.
+`can_set`은 `ip link set can1 down`부터 하므로, **모터 노드를 띄울 때마다 살아 있는
+링크를 내렸다 올린다.** 그 자리에서 `up`이 실패하면 사람이 손으로 재설정해야 한다.
+`.bash_history`에 그렇게 푼 흔적과 bitrate를 500000으로 잘못 친 기록이 남아 있다.
+`chore/terminator-layout`에서 모터 칸의 `can_set`을 떼어내고, CAN 칸은 읽기 전용
+조회만 자동 실행하도록 바꿨다.
