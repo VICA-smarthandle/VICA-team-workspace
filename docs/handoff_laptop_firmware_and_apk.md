@@ -10,6 +10,18 @@
 
 두 작업은 서로 독립이다. 하나만 해도 된다.
 
+## ✅ 두 작업 모두 끝났다 (2026-08-02, 노트북)
+
+이 문서를 새로 여는 사람은 **아래 절차를 다시 밟을 필요가 없다.** 남은 것은 C절뿐이다.
+
+| 작업 | 결과 |
+| --- | --- |
+| A. 펌웨어 | 수정·업로드·bench 검증 완료. `vica_ros2_ws` `tune/handle-guidance-2026-08-02` `0df48ad` (push 완료) |
+| B. APK | `--split-per-abi` 3종 빌드·실기 설치 완료. `VICA_Supervisor` `chore/android-gradle-cleanup` `d7a18be` (push 완료) |
+
+A-7 검증 결과는 코드 1·2 모두 PASS(주황 흐름선과 서보가 같은 쪽)였다. 상세 기록은
+`devlog/2026-08-02-handle-led-fix.md`에 있다. 아래 A·B절은 재현·되돌리기용으로 남긴다.
+
 ---
 
 ## 0. 시작 전 확인
