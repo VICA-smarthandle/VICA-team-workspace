@@ -24,5 +24,16 @@ Jetson Orin NX, ROS 2 Humble 기반 실내 안내 AMR 팀 workspace다.
 - reset은 모든 원인 해제 뒤 로그인한 관리자가 앱에서만 요청한다.
 - LLM·앱은 Mission Manager, Safety 또는 CAN 경로를 우회하지 않는다.
 
-현재 중앙 E-stop 래치, 관리자 앱 단일 reset과 Nav2 `/cmd_vel` → `/cmd_vel_req`
-연결은 `[GAP]/[TARGET]`이며 구현 완료로 표현하지 않는다. 항상 한국어로 응답한다.
+위 세 항목은 2026-08-01~02 실기로 확인됐다. `[GAP]`에서 내린다.
+
+- 중앙 E-stop 래치: `emergency_stop_node`의 `EmergencyLatch`. reset은 모든 원인이
+  해제·fresh일 때만 승인한다(`try_reset`). 시험 `test_emergency_latch`,
+  `test_reset_sequence`.
+- 관리자 앱 단일 reset: `/app_estop_reset` → `reset_allowed`가 true인 상태
+  (`ESTOP_RELEASED_WAIT_RESET`)에서만 통한다. bag 실측에서 "Safety reset 완료 …
+  중앙 래치 해제" 확인.
+- `/cmd_vel_req` 배선: 발행자 6(velocity_smoother + behavior_server) · 구독자 1
+  (Safety), `/cmd_vel_safe` 발행자 1(Safety) · 구독자 1(motor). 2026-08-01 실측.
+
+아직 `[미검증]`인 것은 `devlog/2026-08-02-주행테스트.md` 5절에 모아 둔다.
+항상 한국어로 응답한다.
