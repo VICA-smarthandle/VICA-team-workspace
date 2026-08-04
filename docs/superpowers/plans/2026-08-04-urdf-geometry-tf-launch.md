@@ -53,16 +53,46 @@ git status -sb
 **이후 모든 Task는 `/mnt/ssd/workspaces/tmp/urdf-geometry`에서 수행한다.**
 Task 7만 예외로 `/home/msk/VICA-smarthandle`에서 한다.
 
-- [ ] **준비 3: 수정 전 기준 URDF 확보**
+- [ ] **준비 3: worktree에서 빌드**
+
+새 worktree에는 `install/`이 없어 `xacro`가 `$(find vica_description)`을 풀지 못한다
+(`PackageNotFoundError`). 먼저 빌드해야 이후 모든 검증 명령이 돈다.
 
 ```bash
 source /opt/ros/humble/setup.bash
 cd /mnt/ssd/workspaces/tmp/urdf-geometry
-xacro src/vica_description/urdf/VICA.xacro > /tmp/vica_before.urdf
-grep -c "link name" /tmp/vica_before.urdf
+colcon build --packages-select vica_description
 ```
 
-기대: `10` (링크 10개).
+기대: `Summary: 1 package finished`
+
+- [ ] **준비 4: 수정 전 기준 URDF 확보**
+
+```bash
+source /opt/ros/humble/setup.bash
+cd /mnt/ssd/workspaces/tmp/urdf-geometry
+source install/setup.bash
+xacro src/vica_description/urdf/VICA.xacro > /tmp/vica_before.urdf
+grep -c "<link name" /tmp/vica_before.urdf
+ros2 pkg prefix vica_description
+```
+
+기대: `10` (링크 10개), 경로가 **worktree의 install**을 가리킨다
+(`/mnt/ssd/workspaces/tmp/urdf-geometry/install/vica_description`). 본체 저장소
+경로가 나오면 `source` 순서가 잘못된 것이다.
+
+> **이후 모든 bash 스텝의 전제.** `xacro`·`ros2 run`·`ros2 launch`를 쓰는 스텝은
+> 반드시 아래 두 줄로 시작한다. 하나라도 빠뜨리면 패키지를 못 찾거나 본체 저장소의
+> 옛 파일을 읽는다.
+>
+> ```bash
+> source /opt/ros/humble/setup.bash
+> source /mnt/ssd/workspaces/tmp/urdf-geometry/install/setup.bash
+> ```
+>
+> `VICA.xacro`는 `$(find vica_description)/urdf/materials.xacro`를 include하므로
+> install 사본을 읽는다. `materials.xacro`는 이번에 바뀌지 않으므로 무해하지만,
+> `VICA.xacro` 자체는 `src/` 경로를 직접 넘기므로 항상 수정본이 쓰인다.
 
 ---
 
@@ -401,6 +431,7 @@ steer 조인트(`-0.222`, `±0.0845`)는 정확하므로 건드리지 않는다.
 ```bash
 source /opt/ros/humble/setup.bash
 cd /mnt/ssd/workspaces/tmp/urdf-geometry
+source install/setup.bash
 xacro src/vica_description/urdf/VICA.xacro > /tmp/vica_geom.urdf && echo "XACRO OK"
 check_urdf /tmp/vica_geom.urdf | head -3
 diff /tmp/vica_before.urdf /tmp/vica_geom.urdf
@@ -418,6 +449,7 @@ diff /tmp/vica_before.urdf /tmp/vica_geom.urdf
 source /opt/ros/humble/setup.bash
 export ROS_DOMAIN_ID=91
 export ROS_LOCALHOST_ONLY=1
+source /mnt/ssd/workspaces/tmp/urdf-geometry/install/setup.bash
 cd /mnt/ssd/workspaces/tmp/urdf-geometry
 ros2 run robot_state_publisher robot_state_publisher /tmp/vica_geom.urdf &
 ros2 run joint_state_publisher joint_state_publisher \
@@ -464,6 +496,7 @@ ros2 launch /tmp/probe.launch.py
 source /opt/ros/humble/setup.bash
 export ROS_DOMAIN_ID=91
 export ROS_LOCALHOST_ONLY=1
+source /mnt/ssd/workspaces/tmp/urdf-geometry/install/setup.bash
 for pair in "base_link left_wheel_1" "base_link right_wheel_1" \
             "base_link front_left_caster_wheel_1" \
             "base_footprint laser_frame" "base_footprint camera_link"; do
@@ -547,6 +580,7 @@ EOF
 ```bash
 source /opt/ros/humble/setup.bash
 cd /mnt/ssd/workspaces/tmp/urdf-geometry
+source install/setup.bash
 xacro src/vica_description/urdf/VICA.xacro > /tmp/vica_geom.urdf
 echo "기준 저장 완료"
 ```
@@ -634,6 +668,7 @@ joint origin 두 곳:
 ```bash
 source /opt/ros/humble/setup.bash
 cd /mnt/ssd/workspaces/tmp/urdf-geometry
+source install/setup.bash
 xacro src/vica_description/urdf/VICA.xacro > /tmp/vica_prop.urdf && echo "XACRO OK"
 diff /tmp/vica_geom.urdf /tmp/vica_prop.urdf && echo "=== 순수 리팩터 확인: 출력 동일 ==="
 ```
@@ -701,6 +736,7 @@ EOF
 ```bash
 source /opt/ros/humble/setup.bash
 cd /mnt/ssd/workspaces/tmp/urdf-geometry
+source install/setup.bash
 xacro src/vica_description/urdf/VICA.xacro > /tmp/vica_optical.urdf && echo "XACRO OK"
 check_urdf /tmp/vica_optical.urdf | head -3
 grep -c "<link name" /tmp/vica_optical.urdf
@@ -714,6 +750,7 @@ grep -c "<link name" /tmp/vica_optical.urdf
 source /opt/ros/humble/setup.bash
 export ROS_DOMAIN_ID=91
 export ROS_LOCALHOST_ONLY=1
+source /mnt/ssd/workspaces/tmp/urdf-geometry/install/setup.bash
 ros2 run robot_state_publisher robot_state_publisher /tmp/vica_optical.urdf &
 sleep 4
 timeout 4 ros2 run tf2_ros tf2_echo camera_link camera_optical_frame 2>/dev/null | grep -m1 -A4 "Translation"
@@ -839,6 +876,7 @@ cd /mnt/ssd/workspaces/tmp/urdf-geometry
 source install/setup.bash
 export ROS_DOMAIN_ID=91
 export ROS_LOCALHOST_ONLY=1
+source /mnt/ssd/workspaces/tmp/urdf-geometry/install/setup.bash
 unset DISPLAY                      # 헤드리스 조건 강제
 
 ros2 launch vica_description robot_state.launch.py &
