@@ -302,7 +302,7 @@ ros2 pkg prefix diagnostic_aggregator
 | --- | --- | --- | --- |
 | ⓪ | 전력·클럭 모드 고정 | Host | - |
 | ① | CAN 링크 활성화 | Host | - |
-| ② | URDF·TF·RViz | Host | - |
+| ② | URDF·TF | Host | - |
 | ③ | LiDAR | Host | - |
 | ④ | Safety | Host | - |
 | ⑤ | motor adapter | Host | **가능** |
@@ -372,14 +372,27 @@ motor node를 재시작하지 않고도 knob이 48 %로 돌아온 것으로 확�
 - **motor node는 죽지 않는다.** `[CAN FAULT] ... 출력을 0으로 유지합니다`를 남기고
   속도 상한을 0으로 내린 채 살아 있다.
 
-### ② URDF·TF·RViz (Host)
+### ② URDF·TF (Host)
 
 ```bash
-ros2 launch vica_description display.launch.py
+ros2 launch vica_description robot_state.launch.py
 ```
 
 `robot_state_publisher`가 `base_link → laser_frame`, `camera_link` TF를 발행한다. RViz
 확인 용도만이 아니라 TF 트리의 필수 구성이므로 생략하지 않는다.
+
+이 launch는 화면이 없어도 뜬다. RViz까지 함께 보려면 `display.launch.py`를 쓴다 —
+이 launch는 내부적으로 `robot_state.launch.py`를 include하고 RViz를 얹은 것이라 TF
+발행 자체는 같다. 기본값(`gui:=false`)에서는 슬라이더 없이 `joint_state_publisher`만
+따라오는데, 바퀴가 continuous 조인트라 `/joint_states`가 있어야 TF가 생기고 그래야
+RViz가 바퀴 메시를 그린다 — 슬라이더가 없어도 바퀴는 정상으로 보인다. 관절 축을 손으로
+돌려 확인하고 싶을 때만 `gui:=true`로 `joint_state_publisher_gui`(Qt 슬라이더)를
+얹는다. 어느 쪽이든 화면이 있는 환경에서만 쓴다.
+
+```bash
+ros2 launch vica_description display.launch.py             # 확인용, 화면 필요. 슬라이더 없음
+ros2 launch vica_description display.launch.py gui:=true    # 슬라이더까지
+```
 
 ### ③ LiDAR (Host)
 
