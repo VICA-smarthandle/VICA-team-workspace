@@ -156,11 +156,12 @@ def build_terms(map_id: str) -> dict[str, Term]:
         "display": Term(
             title="② display",
             note=(
-                "URDF·TF·RViz. base_link → laser_frame / camera_link TF의 공급원이라",
-                "RViz를 안 볼 때도 생략하지 않는다.",
-                "AMCL 초기 위치는 이 RViz의 2D Pose Estimate로 매번 사람이 찍는다.",
+                "URDF·TF. base_link → laser_frame / camera_link TF의 공급원이라",
+                "화면이 없어도 생략하지 않는다. robot_state_publisher + joint_state_publisher만",
+                "뜨고 RViz는 뜨지 않는다.",
+                "확인용으로 RViz를 보려면 전용 rviz 칸을 쓰거나 display.launch.py를 직접 띄운다.",
             ),
-            command="ros2 launch vica_description display.launch.py",
+            command="ros2 launch vica_description robot_state.launch.py",
             mode=AUTO,
                     guard=("robot_state_pub", "joint_state_pub",),
 ),
