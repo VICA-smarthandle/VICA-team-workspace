@@ -17,8 +17,10 @@
 - **주행 거동은 바뀌면 안 된다.** 실물 오도메트리는 URDF를 읽지 않는다. 달라졌다면 무언가 잘못된 것이다.
 - **`left_wheel_joint`·`right_wheel_joint` 이름을 바꾸지 않는다.** Isaac Action Graph에 하드코딩되어 있다.
 - **캐스터 이름 `front_*`를 `rear_*`로 바꾸지 않는다.** USD 재import가 전제이며 이번 범위 밖이다.
-- **다음 파일은 건드리지 않는다:** `urdf/VICA.gazebo`, `urdf/before_VICA.xacro`, `urdf/VICA.trans`, `rviz/urdf.rviz`, `meshes/` 전체, `launch/display.launch`, `launch/controller.launch`, `launch/gazebo.launch`.
+- **다음 파일은 건드리지 않는다:** `urdf/VICA.gazebo`, `urdf/before_VICA.xacro`, `urdf/VICA.trans`, `rviz/urdf.rviz`, `meshes/` 전체, `launch/display.launch`(ROS 1 XML), `launch/controller.launch`, `launch/gazebo.launch`.
   `urdf.rviz`는 `feat/home-return` 브랜치가 이미 수정 중이라 손대면 불필요한 충돌이 생긴다.
+  **주의:** `launch/display.launch.py`(ROS 2 파이썬)는 Task 5에서 수정한다. 위 목록의
+  `display.launch`(확장자 `.launch`)는 ROS 1 잔재이며 별개 파일이다.
 - 커밋 메시지는 한국어 본문으로 쓰고 `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>`로 끝낸다.
 - 모든 pytest는 `vica_ros2_ws/src`에서 실행한다. 테스트가 `Path(__file__).parents[2]`로 소스 트리를 찾으므로 다른 위치에서 실행하면 경로를 잃는다.
 
@@ -783,30 +785,40 @@ EOF
 
 기동 매뉴얼 ②단계가 실주행에서 `display.launch.py`를 띄우는데, 이 launch는 `joint_state_publisher_gui`를 조건 없이 함께 띄운다. Qt가 필요해 헤드리스에서는 TF 트리가 통째로 끊긴다.
 
-`display.launch.py`의 기본값을 바꾸면 매뉴얼과 팀 습관이 깨지므로, 실주행용 launch를 새로 만든다.
+**구조는 ROS 2 정석인 계층적 include + 조건 인자를 따른다.** 기반 launch를 하나 두고 상위 launch가 그것을 include한다. `nav2_bringup`이 `bringup_launch.py` → `localization_launch.py`·`rviz_launch.py`로 쪼갠 구조이며, 이 저장소도 `vica_slam_bringup.launch.py`에서 이미 같은 패턴을 쓴다. 복사본을 두 개 두면 `xacro` 경로나 `ParameterValue` 처리가 바뀔 때 두 곳이 조용히 어긋난다.
+
+```
+robot_state.launch.py   기반 — robot_state_publisher + (gui ? jsp_gui : jsp)
+                               인자: model, gui(기본 false)
+display.launch.py       상위 — 위를 include(gui:=true) + rviz2
+```
+
+`gui` 조건 분기가 `/joint_states` 이중 발행을 원천 차단한다.
 
 **Files:**
 - Create: `src/vica_description/launch/robot_state.launch.py`
-- 참고(수정 없음): `src/vica_description/launch/display.launch.py`
+- Modify: `src/vica_description/launch/display.launch.py`
 
 **Interfaces:**
+- Produces: `robot_state.launch.py` — launch 인자 `model`(기본값 = 패키지 share의 `urdf/VICA.xacro`), `gui`(기본 `false`)
 - Consumes: `src/vica_description/urdf/VICA.xacro` (Task 2~4의 결과)
-- Produces: launch 파일 `robot_state.launch.py` — launch 인자 `model` (기본값 = 패키지 share의 `urdf/VICA.xacro`)
 
-- [ ] **Step 1: 새 launch 파일 작성**
+- [ ] **Step 1: 기반 launch 작성**
 
 `src/vica_description/launch/robot_state.launch.py`를 만든다.
 
 ```python
-"""실주행용 TF 발행. GUI에 의존하지 않는다.
+"""로봇 TF 발행의 기반 launch. 실주행은 이것만 띄운다.
 
-display.launch.py는 joint_state_publisher_gui(Qt)와 RViz를 함께 띄우므로
-헤드리스 환경에서 뜨지 않는다. 그런데 기동 매뉴얼은 이 launch를 TF 트리의 필수
-구성으로 지정한다. 실주행 경로를 GUI에서 떼어내려고 이 파일을 둔다.
+joint_state_publisher_gui는 Qt가 필요해 헤드리스 환경에서 뜨지 않는다. 그런데
+기동 매뉴얼은 TF 발행을 필수 구성으로 지정하므로, 실주행 경로는 화면 없이 동작해야
+한다. 그래서 기본값은 GUI 없는 joint_state_publisher다.
 
-joint_state_publisher_gui는 joint_state_publisher를 의존성으로 포함하고 Qt 창만
-얹은 래퍼다. 발행 로직이 같으므로 /joint_states 내용과 발행량은 동일하다.
-바뀌는 것은 슬라이더 창이 사라지는 것뿐이고, RViz에서 바퀴 메시는 그대로 보인다.
+joint_state_publisher_gui는 joint_state_publisher를 의존성으로 포함하고 Qt 창만 얹은
+래퍼다. 발행 로직이 같으므로 /joint_states 내용과 발행량은 동일하고, RViz에서 바퀴
+메시도 그대로 보인다. 바뀌는 것은 슬라이더 창뿐이다.
+
+gui 인자로 둘 중 하나만 띄운다. 둘 다 띄우면 /joint_states를 이중 발행한다.
 
 나중에 엔코더 기반 각도를 넣을 때는 joint_state_publisher의 source_list 파라미터에
 부분 발행 토픽을 더하면 된다. 캐스터 4개는 센서가 없어도 기본값으로 자동 보충된다.
@@ -816,6 +828,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import Command, FindExecutable, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
@@ -826,6 +839,7 @@ def generate_launch_description():
     default_model = os.path.join(pkg_share, "urdf", "VICA.xacro")
 
     model = LaunchConfiguration("model")
+    gui = LaunchConfiguration("gui")
 
     robot_description = {
         "robot_description": ParameterValue(
@@ -840,6 +854,11 @@ def generate_launch_description():
 
     return LaunchDescription([
         DeclareLaunchArgument("model", default_value=default_model),
+        DeclareLaunchArgument(
+            "gui",
+            default_value="false",
+            description="true면 슬라이더 창(joint_state_publisher_gui)을 띄운다. 화면이 있어야 한다.",
+        ),
         Node(
             package="robot_state_publisher",
             executable="robot_state_publisher",
@@ -850,15 +869,70 @@ def generate_launch_description():
             package="joint_state_publisher",
             executable="joint_state_publisher",
             parameters=[robot_description],
+            condition=UnlessCondition(gui),
+            output="screen",
+        ),
+        Node(
+            package="joint_state_publisher_gui",
+            executable="joint_state_publisher_gui",
+            parameters=[robot_description],
+            condition=IfCondition(gui),
             output="screen",
         ),
     ])
 ```
 
-`package.xml`에 `joint_state_publisher`가 이미 `exec_depend`로 들어 있으므로 의존성 추가는 필요 없다.
-`CMakeLists.txt`도 `launch` 디렉터리 전체를 설치하므로 수정할 필요가 없다.
+- [ ] **Step 2: display.launch.py를 include 구조로 바꾼다**
 
-- [ ] **Step 2: 빌드**
+`src/vica_description/launch/display.launch.py` 전체를 아래로 교체한다. 기존 파일에 있던 `robot_description` 관련 주석(`값을 문자열(str)로 명시하지 않아서 파싱 실패`)은 그 로직이 `robot_state.launch.py`로 옮겨갔으므로 함께 옮기지 않는다 — 새 파일에 `value_type=str`이 이미 들어 있다.
+
+```python
+"""URDF 확인용 launch. RViz와 슬라이더 창을 함께 띄운다.
+
+TF 발행 자체는 robot_state.launch.py가 소유한다. 이 파일은 거기에 gui:=true를 넘기고
+RViz만 얹는다. 실주행은 robot_state.launch.py를 직접 띄운다 — 화면이 없어도 동작한다.
+"""
+import os
+
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    pkg_share = get_package_share_directory("vica_description")
+    default_model = os.path.join(pkg_share, "urdf", "VICA.xacro")
+    default_rviz_config = os.path.join(pkg_share, "rviz", "urdf.rviz")
+    robot_state_launch = os.path.join(pkg_share, "launch", "robot_state.launch.py")
+
+    model = LaunchConfiguration("model")
+    rviz_config = LaunchConfiguration("rviz_config")
+
+    return LaunchDescription([
+        DeclareLaunchArgument("model", default_value=default_model),
+        DeclareLaunchArgument("rviz_config", default_value=default_rviz_config),
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(robot_state_launch),
+            launch_arguments={
+                "model": model,
+                "gui": "true",
+            }.items(),
+        ),
+        Node(
+            package="rviz2",
+            executable="rviz2",
+            arguments=["-d", rviz_config],
+            output="screen",
+        ),
+    ])
+```
+
+`package.xml`에 `joint_state_publisher`·`joint_state_publisher_gui`·`rviz2`가 이미 `exec_depend`로 들어 있고, `CMakeLists.txt`가 `launch` 디렉터리 전체를 설치하므로 **둘 다 수정할 필요가 없다.** 확인만 하고 건드리지 않는다.
+
+- [ ] **Step 3: 빌드**
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -868,15 +942,13 @@ colcon build --packages-select vica_description
 
 기대: `Summary: 1 package finished`
 
-- [ ] **Step 3: 헤드리스 기동 검증 — 이 Task의 핵심**
+- [ ] **Step 4: 헤드리스 기동 검증 — 이 Task의 핵심**
 
 ```bash
 source /opt/ros/humble/setup.bash
-cd /mnt/ssd/workspaces/tmp/urdf-geometry
-source install/setup.bash
+source /mnt/ssd/workspaces/tmp/urdf-geometry/install/setup.bash
 export ROS_DOMAIN_ID=91
 export ROS_LOCALHOST_ONLY=1
-source /mnt/ssd/workspaces/tmp/urdf-geometry/install/setup.bash
 unset DISPLAY                      # 헤드리스 조건 강제
 
 ros2 launch vica_description robot_state.launch.py &
@@ -886,63 +958,90 @@ echo "=== 노드 ==="
 ros2 node list
 
 echo "=== /joint_states ==="
-timeout 5 ros2 topic echo /joint_states --once | head -14
+timeout 6 ros2 topic echo /joint_states --once | head -14
 
 echo "=== 바퀴 TF ==="
-timeout 4 ros2 run tf2_ros tf2_echo base_link left_wheel_1 2>/dev/null | grep -m1 -A1 Translation
-
-pkill -f "robot_state_publisher|joint_state_publisher"
+timeout 6 ros2 run tf2_ros tf2_echo base_link left_wheel_1 2>/dev/null | grep -m1 -A1 Translation
 ```
 
 기대:
-- 노드 `/joint_state_publisher`와 `/robot_state_publisher`가 **DISPLAY 없이** 뜬다
-- `/joint_states`의 `name`에 조인트 6개가 모두 있다
+- 노드가 정확히 둘: `/robot_state_publisher`, `/joint_state_publisher`
+- **`/joint_state_publisher_gui`는 뜨지 않아야 한다** (`gui` 기본값 false)
+- `/joint_states`의 `name`에 조인트 6개
 - `base_link → left_wheel_1` translation이 `0.154, 0.182, -0.125`
 
-- [ ] **Step 4: display.launch.py가 그대로 동작하는지 확인**
+정리:
+```bash
+pkill -f "robot_state_publisher|joint_state_publisher"
+sleep 1
+pgrep -af "robot_state_publisher|joint_state_publisher" || echo "정리 완료"
+```
 
-`display.launch.py`는 수정하지 않았지만, 회귀가 없는지 확인한다. **이 단계는 화면이 있는 환경에서 한다.**
+`pkill`은 SIGTERM을 직접 보내므로 `rclpy`가 `ExternalShutdownException` 트레이스백을 남길 수 있다. 이는 강제 종료 방식 때문이며 launch 파일 결함이 아니다.
+
+- [ ] **Step 5: gui 인자 분기 검증**
+
+`gui:=true`일 때 GUI 쪽이 선택되는지 확인한다. 화면이 없으면 `joint_state_publisher_gui`가 Qt 오류로 죽는데, **그것이 정확히 기대 동작이다** — 조건 분기가 작동했다는 증거다.
 
 ```bash
 source /opt/ros/humble/setup.bash
-cd /mnt/ssd/workspaces/tmp/urdf-geometry
-source install/setup.bash
+source /mnt/ssd/workspaces/tmp/urdf-geometry/install/setup.bash
 export ROS_DOMAIN_ID=91
+export ROS_LOCALHOST_ONLY=1
+unset DISPLAY
+
+timeout 12 ros2 launch vica_description robot_state.launch.py gui:=true 2>&1 | grep -iE "joint_state_publisher|qt|display|error" | head -10
+```
+
+기대: `joint_state_publisher_gui`를 띄우려 시도한 흔적이 보이고, GUI 없는 `joint_state_publisher`는 **뜨지 않는다.** Qt 관련 실패 메시지는 헤드리스 환경에서 정상이다.
+
+정리:
+```bash
+pkill -f "robot_state_publisher|joint_state_publisher"
+```
+
+- [ ] **Step 6: RViz 회귀 검사 — 이 단계는 수행하지 않는다**
+
+화면이 있는 환경에서 사람이 눈으로 확인해야 하므로 **사용자가 전체 완료 후 직접 수행한다.** 구현자는 건너뛰고 그 사실을 보고서에 적는다.
+
+확인 항목(사용자용 참고):
+
+```bash
 ros2 launch vica_description display.launch.py
 ```
 
-RViz 회귀 검사 항목:
 - 바퀴 4개가 차체 대비 이전과 같은 위치에 보인다 — 움직였다면 visual origin 수정 오류
 - 바퀴가 지면에 닿아 있고 파묻히지 않는다
-- `joint_state_publisher_gui` 슬라이더로 바퀴·캐스터를 돌려도 축을 벗어나 흔들리지 않는다
+- 슬라이더로 바퀴·캐스터를 돌려도 축을 벗어나 흔들리지 않는다
 - 차체·라이다가 이전보다 3 mm 위로 올라갔다(미세함)
 - `camera_optical_frame` 축이 `camera_link`와 다른 방향(전방 = 파랑 Z)을 가리킨다
 
-확인 후 Ctrl+C로 종료한다.
-
-- [ ] **Step 5: 커밋**
+- [ ] **Step 7: 커밋**
 
 ```bash
 cd /mnt/ssd/workspaces/tmp/urdf-geometry
-git add src/vica_description/launch/robot_state.launch.py
+git add src/vica_description/launch/robot_state.launch.py \
+        src/vica_description/launch/display.launch.py
 git diff --cached --check
 git commit -m "$(cat <<'EOF'
-refactor(description): 실주행 TF launch를 GUI에서 분리한다
+refactor(description): TF launch를 기반+상위 구조로 나눈다
 
 기동 매뉴얼 ②단계가 실주행에서 display.launch.py를 띄우는데, 이 launch는
 joint_state_publisher_gui(Qt)를 조건 없이 함께 올린다. 헤드리스에서는 뜨지 않아
 TF 트리가 통째로 끊긴다.
 
+robot_state.launch.py를 기반으로 두고 gui 인자로 GUI 유무를 가른다.
+display.launch.py는 그것을 include하며 gui:=true를 넘기고 RViz만 얹는다.
+nav2_bringup과 이 저장소의 vica_slam_bringup이 쓰는 계층 구조와 같다.
+
 joint_state_publisher_gui는 joint_state_publisher에 Qt 창만 얹은 래퍼라 발행
-로직이 같다. 창만 빠지고 RViz의 바퀴 메시는 그대로다. display.launch.py는
-확인용으로 현행 유지한다.
+로직이 같다. 창만 빠지고 RViz의 바퀴 메시는 그대로다.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 EOF
 )"
 ```
 
----
 
 ## Task 6: 옛 좌표의 run_tf_vica.sh를 지운다
 
