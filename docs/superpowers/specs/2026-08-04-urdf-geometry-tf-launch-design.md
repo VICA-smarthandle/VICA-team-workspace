@@ -16,7 +16,7 @@
 
 | 항목 | URDF | 실제 | 오차 |
 |---|---|---|---|
-| 구동륜 간격 | 0.293 m | 0.370 m | **7.7 cm 좁음** (한쪽당 3.85 cm) |
+| 구동륜 간격 | 0.293 m | 0.364 m | **7.1 cm 좁음** (한쪽당 3.55 cm) |
 | 캐스터 휠 y | ±0.0695 | ±0.0795 | 10 mm 안쪽 |
 | 차체·라이다 메시 z | −0.044 | −0.041 | 3 mm |
 
@@ -87,9 +87,36 @@ RViz로는 발견할 수 없는 종류의 버그다. `visual` origin이 `joint` 
 
 | 항목 | 값 | 근거 |
 |---|---|---|
-| 구동륜 간격 | 0.370 m | `encoder.yaml`·`encoder_feedback.py`·`mdrobot_can_keyboard_knob_node.py` 세 곳이 `wheel_base_m: 0.37`을 쓰며 오도메트리 정상 |
+| 구동륜 간격 | 0.364 m | **줄자 실측** (바퀴 중심 사이). CAD 0.3618과 2.2 mm 차이로 가장 근접하다 |
 | `laser_frame` 절대 높이 | 0.382 m | `base_link_height 0.19 + laser_z 0.192` |
 | `camera_link` 절대 높이 | 0.320 m | `0.19 + 0.130` |
+
+#### 3.1.1 URDF의 0.364와 코드의 `wheel_base_m 0.37`은 다른 값이다 — 통일하지 말 것
+
+세 숫자가 나란히 존재하며, **서로 다른 것을 재므로 같을 필요가 없다.**
+
+| 값 | 무엇을 재나 | 사는 곳 |
+|---|---|---|
+| 0.3618 | CAD 도면상 바퀴 중심 간격 | 설계 |
+| **0.364** | 실물 바퀴 중심 간격 (줄자 실측) | **URDF (기하)** |
+| **0.370** | 오도메트리 유효 트레드 | **`wheel_base_m` (보정 상수)** |
+
+차동구동에서 `wheel_base_m`은 자로 잰 거리가 아니라 **회전 시험으로 맞춘 보정
+상수**다. 타이어 폭이 67.8 mm로 두껍고 접지면에서 미끄러지므로 로봇이 실제로 도는
+반경은 바퀴 중심 간격과 다르다. 오도메트리만 6 mm 큰 현재 상태는 캘리브레이션
+결과로 자연스럽다.
+
+URDF는 **바퀴가 물리적으로 있는 자리**를 담는다. 시뮬레이터가 물리 바퀴를 놓는
+좌표이자 TF가 "바퀴가 여기 있다"고 알리는 값이다. 여기에 보정 상수 0.370을 넣으면
+실물에 없는 자리에 바퀴를 그리게 된다.
+
+> **원본 artifact 문서의 처방은 절반만 맞다.** "URDF가 0.293이니 0.37로 고쳐라"에서
+> 진단(0.293은 CAD와 7 cm 벌어져 명백히 틀림)은 옳지만, 처방은 부정확하다.
+> URDF에 넣을 값은 오도메트리 보정 상수가 아니라 실측 기하값이다.
+
+`wheel_base_m`을 0.364로 바꾸면 회전각이 1.65% 크게 계산되어 **주행 거동이 실제로
+달라진다.** 이번 작업의 전제("거동은 바뀌지 않는다")와 정면으로 충돌하므로 건드리지
+않는다.
 
 ### 3.2 CAD STL 실측
 
@@ -128,7 +155,7 @@ CAD `z −0.1490` → 절대 `0.19 − 0.041 − 0.149 = 0.000`, 정확히 지�
 | `run_tf_vica.sh` 삭제 | 살려두면 이중 정본이 되어 같은 어긋남이 재발한다 |
 | 캐스터 이름 변경은 보류 | USD 재import가 전제인데 Isaac이 이번 범위 밖이다 |
 | 커밋을 성격별로 분리 | 좌표 변경과 구조 변경이 섞이면 원인을 가릴 수 없다 |
-| 실물 코드는 수정하지 않는다 | `wheel_base_m = 0.37`은 이미 옳다. URDF를 코드에 맞추는 작업이지 그 반대가 아니다 |
+| 실물 코드는 수정하지 않는다 | `wheel_base_m 0.37`은 오도메트리 보정 상수이고 URDF의 0.364는 실측 기하다. 서로 다른 값이므로 통일 대상이 아니다 (3.1.1) |
 
 ### 4.1 한계 (명시)
 
@@ -150,13 +177,13 @@ Isaac Sim 자산(USD, `add_drive_odom_graphs.py`)은 이 저장소·이 장비�
 
 | 대상 | 현재 | 수정 |
 |---|---|---|
-| `left_wheel_joint` origin | `0.154 0.1465 -0.125` | `0.154 0.185 -0.125` |
-| `right_wheel_joint` origin | `0.154 -0.1465 -0.125` | `0.154 -0.185 -0.125` |
-| `left_wheel_1` visual+collision | `-0.154 -0.1465 0.084` | `-0.154 -0.185 0.084` |
-| `right_wheel_1` visual+collision | `-0.154 0.1465 0.084` | `-0.154 0.185 0.084` |
+| `left_wheel_joint` origin | `0.154 0.1465 -0.125` | `0.154 0.182 -0.125` |
+| `right_wheel_joint` origin | `0.154 -0.1465 -0.125` | `0.154 -0.182 -0.125` |
+| `left_wheel_1` visual+collision | `-0.154 -0.1465 0.084` | `-0.154 -0.182 0.084` |
+| `right_wheel_1` visual+collision | `-0.154 0.1465 0.084` | `-0.154 0.182 0.084` |
 
-visual을 joint의 반대값으로 유지하면 메시는 CAD 위치(±0.1814)에 그대로 남는다.
-실물 0.185와의 3.6 mm 차이는 CAD 공차 범위다.
+visual을 joint의 반대값으로 유지하면 메시는 CAD 위치(좌 +0.1814, 우 −0.1804)에 그대로
+남는다. 실측 반폭 0.182와의 차이는 좌 0.6 mm·우 1.6 mm로 CAD 공차 범위다.
 
 ### 5.2 수정 B — 캐스터 휠 Y
 
@@ -203,7 +230,7 @@ RealSense 드라이버가 동일 이름으로 발행하여 TF 중복 충돌이 �
 y 계열과 `body_center_z` 연동 z를 property로 묶는다.
 
 ```xml
-<xacro:property name="wheel_separation" value="0.37"/>
+<xacro:property name="wheel_separation" value="0.364"/>   <!-- 줄자 실측. wheel_base_m과 별개 (3.1.1) -->
 <xacro:property name="wheel_y"          value="${wheel_separation / 2}"/>
 <xacro:property name="caster_steer_y"   value="0.0845"/>
 <xacro:property name="caster_y"         value="0.0795"/>
@@ -252,7 +279,7 @@ base_link → left_wheel_1  Translation: [0.154, 0.146, -0.125]   ← 현행 0.1
 ```
 
 헤드리스에서 조인트 6개가 전부 잡히고 바퀴 TF가 정상 발행된다. 수정 후에는 같은
-자리에 `0.185`가 나와야 한다(8.2절).
+자리에 `0.182`가 나와야 한다(8.2절).
 
 ### 5.8 `run_tf_vica.sh` 삭제
 
@@ -268,7 +295,7 @@ git 이력에 남으므로 복구는 언제든 가능하다.
 | `base_link → laser_frame` | **불변** (`0.185/0/0.192`) | `pose_bootstrap_node.py:298` |
 | `base_link → camera_link` | **불변** | `vica_nvblox.launch.py:56` |
 | `map → base_footprint` | **불변** | `robot_health_monitor:271`, `mission_manager:724` |
-| `base_link → left/right_wheel_1` | y `±0.1465` → `±0.185` | **없음** |
+| `base_link → left/right_wheel_1` | y `±0.1465` → `±0.182` | **없음** |
 | 캐스터 휠 | y `∓0.015` → `∓0.005` | **없음** |
 | `camera_link → camera_optical_frame` | 신규 | 없음 (이름 사용처 0건) |
 
@@ -329,14 +356,14 @@ diff /tmp/vica_before.urdf /tmp/vica_after.urdf
 
 | `tf2_echo` | 기대 translation |
 |---|---|
-| `base_link → left_wheel_1` | `0.154, 0.185, -0.125` |
-| `base_link → right_wheel_1` | `0.154, -0.185, -0.125` |
+| `base_link → left_wheel_1` | `0.154, 0.182, -0.125` |
+| `base_link → right_wheel_1` | `0.154, -0.182, -0.125` |
 | `base_link → front_left_caster_wheel_1` | `-0.252, 0.0795, -0.148` |
 | `base_footprint → laser_frame` | `0.185, 0.0, 0.382` |
 | `base_footprint → camera_link` | `0.28683, 0.0, 0.320` |
 
-**최종 확인:** 좌·우 구동륜 y 차이 = `0.185 − (−0.185)` = **0.370**.
-실물 코드의 `wheel_base_m`과 일치해야 한다.
+**최종 확인:** 좌·우 구동륜 y 차이 = `0.182 − (−0.182)` = **0.364** = 줄자 실측값.
+`wheel_base_m 0.37`과 일치하지 **않는 것이 정상이다** — 3.1.1절 참조.
 
 ### 8.3 계약 테스트
 
@@ -366,7 +393,7 @@ pytest src/vica_nav2/test/test_footprint_contract.py
 
 - `check_urdf` 통과, `diff`에 의도하지 않은 변경 없음
 - 모든 `tf2_echo` 기대값 일치
-- 좌우 구동륜 y 차이 = 0.370
+- 좌우 구동륜 y 차이 = 0.364
 - 커밋 3의 순수 리팩터 `diff`가 비어 있다
 - 계약 테스트 전부 통과
 - `colcon build --packages-select vica_description` 성공
@@ -382,9 +409,11 @@ pytest src/vica_nav2/test/test_footprint_contract.py
 - 구동륜 `dynamics` · `limit`
 - 캐스터 collision 반지름 **0.042** — CAD상 캐스터가 4.5 mm 떠 있어 접지 보정이
   필요하다. 0.0375를 그대로 쓰면 PhysX가 로봇을 뒤로 0.635° 기울여 세운다
-- `add_drive_odom_graphs.py`의 `WHEEL_DISTANCE`: `0.293` → **`0.37`**
+- `add_drive_odom_graphs.py`의 `WHEEL_DISTANCE`: `0.293` → **`0.364`**
 
-**마지막 항목을 빠뜨리면 수정 A가 무의미해진다.** USD와 컨트롤러가 모두 0.37이어야 한다.
+**마지막 항목을 빠뜨리면 수정 A가 무의미해진다.** USD와 컨트롤러가 모두 0.364여야 한다.
+시뮬레이터는 물리 엔진이 바퀴를 직접 굴리므로 실물의 보정 상수 0.37이 아니라 기하값을
+쓴다. 실물과 값이 다른 이유는 3.1.1절에 있다.
 
 `left_wheel_joint`·`right_wheel_joint`는 Isaac Action Graph에 하드코딩되어 있으므로
 **절대 이름을 바꾸지 않는다.**
