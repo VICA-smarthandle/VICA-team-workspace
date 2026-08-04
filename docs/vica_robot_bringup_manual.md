@@ -375,11 +375,20 @@ motor node를 재시작하지 않고도 knob이 48 %로 돌아온 것으로 확�
 ### ② URDF·TF·RViz (Host)
 
 ```bash
-ros2 launch vica_description display.launch.py
+ros2 launch vica_description robot_state.launch.py
 ```
 
 `robot_state_publisher`가 `base_link → laser_frame`, `camera_link` TF를 발행한다. RViz
 확인 용도만이 아니라 TF 트리의 필수 구성이므로 생략하지 않는다.
+
+이 launch는 화면이 없어도 뜬다. RViz까지 함께 보려면 `display.launch.py`를 쓴다 —
+이 launch는 내부적으로 `robot_state.launch.py`를 `gui:=true`로 include하고 RViz를
+얹은 것이라 TF 발행 자체는 같지만, `joint_state_publisher_gui`(Qt 슬라이더)와 RViz가
+딸려오므로 화면이 있는 환경에서만 쓴다.
+
+```bash
+ros2 launch vica_description display.launch.py   # 확인용, 화면 필요
+```
 
 ### ③ LiDAR (Host)
 
