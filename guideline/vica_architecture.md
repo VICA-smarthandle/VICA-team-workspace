@@ -265,7 +265,7 @@ uint8 transition        # RAISED=0, ESCALATED=1, REMINDER=2, CLEARED=3
 ### 5.1 정상 발화
 
 ```text
-ros_stt_node
+ros_wakeword_node               ← 마이크 앞단. 호출어 "비카야" 감지 후 청취
   └─ /vica/user_text
       └─ ros_node
           ├─ /vica/robot_state 구독
@@ -273,6 +273,11 @@ ros_stt_node
           ├─ destination_matcher 코드 검증
           └─ /vica/intent
 ```
+
+호출어를 진입 경로로 두는 이유는 사용자가 버튼을 누를 수 없기 때문이다. 시각장애인
+사용자는 push-to-talk 엔터를 칠 수 없고 스마트핸들에 버튼을 더 달 수 없다.
+`ros_stt_node`(push-to-talk)는 개발용으로 남으며 launch 에는 들어가지 않는다 —
+마이크는 한 프로그램만 쓸 수 있어 동시 실행이 불가능하다.
 
 LLM backend는 환경변수로 선택한다.
 
@@ -286,8 +291,8 @@ LLM 호출 실패 시 `unknown` 의도와 안전한 재시도 문구를 반환�
 ### 5.2 긴급어
 
 ```text
-마이크 상시 감시
-→ EmergencyMonitor
+마이크 상시 감시 (ros_wakeword_node)
+→ openWakeWord 모델 B 관문 → whisper 검증 → 정확 매칭
 → /vica/emergency
 ├─ Mission Manager: goal 취소 + estopped 상태
 └─ emergency_estop_bridge
@@ -296,6 +301,14 @@ LLM 호출 실패 시 `unknown` 의도와 안전한 재시도 문구를 반환�
    → /emergency_stop
 ```
 
+**2단 구조를 쓰는 이유**: 모델 관문만으로는 유사어(멈춤·정지야·스톡)가 뚫리고,
+whisper 상시 감시만으로는 부하가 크다(RTF 0.59 → 0.12). 두 신호는 오류 원인이
+독립적이라 — 임베딩은 유사음에, whisper 는 발음 편차에 약하다 — 함께 쓰면 오탐이
+크게 준다. 실측 근거는 `vica-wakeword/docs/stt-gate-findings.md`.
+
+`keyword` 는 whisper 전사에서 정확 매칭으로 뽑으므로 항상 아래 목록 안의 값이다.
+브리지·래치 체인은 변경되지 않았다.
+
 hard-stop 키워드는 현재 6개다.
 
 ```text
@@ -303,18 +316,31 @@ hard-stop 키워드는 현재 6개다.
 ```
 
 `잠깐`, `천천히`, `느리게`는 E-stop 감지 목록에서 제외되어 일반 발화로 처리된다.
-감속 intent는 아직 `[TARGET]`이다.
+감속 intent는 아직 `[TARGET]`이다. `잠깐` 계열을 일시정지(`pause`) intent 로
+연결하는 것은 `vica_scenario.md` 9.6절이 정한 방향이며 음성 쪽은 아직 `[GAP]`이다.
+
+`ros_emergency_node`(whisper 상시 감시)는 롤백 경로로 남아 있다. launch 에는 없다.
 
 ### 5.3 현재 실행 계약
 
-`vica_voice.launch.py`는 LLM node, TTS node와 emergency monitor만 실행한다. 개발용
-RobotState·state-machine stub과 중복 `vica_interfaces` 사본은 제거됐다. push-to-talk
-STT는 대화형 입력이므로 별도 터미널에서 실행한다.
+`vica_voice.launch.py`는 LLM node, TTS node, 웨이크워드 node, 청각 안내 node를
+실행한다(2026-08-04 갱신). 개발용 RobotState·state-machine stub 과 중복
+`vica_interfaces` 사본은 제거됐고, push-to-talk STT 는 launch 에서 빠졌다.
 
 TTS는 STT·LLM·Mission Manager가 발행하는 `/vica/tts_request`를 우선순위 큐로 처리하고
-`/vica/tts_state`를 발행한다. emergency monitor는 재생 중 감시를 잠시 억제하고, 제한
-시간이 지나면 자동 재개한다. 코드·단위 테스트 계약은 연결됐고 실제 마이크·스피커
-재생은 `[미검증]`이다.
+`/vica/tts_state`를 발행한다. 재생은 워커 스레드에서 **문장 단위로 끊어** 돌며, 문장
+사이마다 감시가 다시 열린다 — 한 덩어리가 길수록 사용자의 진짜 "멈춰"를 놓치는 구간이
+길어지기 때문이다. 웨이크워드 node 는 이 신호로 재생 중 감시를 억제하고, 해제 신호를
+놓쳐도 fail-safe 타임아웃으로 자동 재개한다. 코드·단위 테스트 계약은 연결됐고 실제
+마이크·스피커 재생은 `[미검증]`이다.
+
+청각 안내 node(`ros_audio_cue_node`)는 `/vica/turn_guide`와 `/vica_goal_event`를 구독해
+회전·도착을 소리와 말로 알린다(2026-08-05). 안내음은 TTS 큐를 거치지 않으므로 줄을
+서지 않고 `/vica/tts_state`도 켜지 않는다. 회전 문구는 축약하지 않고 매번 같은 문장을
+쓴다 — 방향 안내는 안전과 직결되어 매번 같은 판단이 가능해야 한다.
+
+음성 저장소 내부 토픽(팀 계약 아님): `/vica/wake`(호출 앵커, 계측용),
+`/vica/sim/event`·`/vica/sim/reset`(`[SIM ONLY]`).
 
 ## 6. Mission Manager 아키텍처
 
@@ -777,11 +803,17 @@ E-stop과 성격이 다른 별도 경로다. 안전 사건이 아니라 목표 �
 
 Mission Manager는 `cancelTask()`로 `NavigateToPose` goal을 취소할 뿐 감속을 지시하지
 않는다. 취소되면 `controller_server`가 `/cmd_vel` 발행을 멈추고, 그 뒤를
-`velocity_smoother`가 `max_decel`(현재 `[-2.5, 0.0, -3.2]`) 기울기로 0까지 이어 붙여
+`velocity_smoother`가 `max_decel`(현재 `[-1.0, 0.0, -3.2]`) 기울기로 0까지 이어 붙여
 감속 램프를 만든다. 이 값은 도착·취소·controller 정지에 전역 적용되며 `[미검증]`
 트레이드오프로 남아 있어 실기에서 확정한다.
 
-`max_velocity`가 `[0.26, 0.0, 1.0]`이므로 이 감속률에서 정지까지 약 0.104초, 0.0135 m다.
+직선 감속은 2026-08-01에 `-2.5`에서 `-1.0`으로 완화했다. 시각장애인이 핸들을 잡고
+걷기 때문에 정지 순간의 충격이 곧 안전이라는 판단이며, 대가로 감속 구간 이동이
+1.35 cm에서 3.38 cm로 늘었다. `footprint_padding` 0.05 m가 이를 덮는다
+(`vica_nav2/config/nav2_params.yaml`의 `velocity_smoother` 주석).
+회전(`-3.2`)은 승차감이 아니라 조향 권한이므로 DWB와 정합시킨 값 그대로 둔다.
+
+`max_velocity`가 `[0.26, 0.0, 1.0]`이므로 이 감속률에서 정지까지 약 0.26초, 0.0338 m다.
 즉 감속 램프와 즉시 정지의 물리적 차이가 매우 작다. 사용자에게 "천천히 멈춘다"를 제공해야
 하는 상황에서는 감속률이 아니라 정지 전 유예 시간으로 설계한다
 (`vica_scenario.md` 2-1.2절).
@@ -1029,7 +1061,7 @@ message에 구분해 남긴다.
 | P1 | 앱 Mission 상세 상태 미연결 | 공통 mission status 계약 정의 |
 | P1 | 목적지 통합 runtime 미검증 | 지도별 YAML 저장·reload·음성 검색을 함께 검증 |
 | P1 | 상태 감시 임계값이 전부 실측 없이 정해져 있음 | Jetson에서 QoS·주기·CPU를 실측해 확정. 확정 전 결함 표시를 판정 근거로 쓰지 않는다(13.4절) |
-| P1 | 긴급어 감시의 마이크 무입력이 관측 불가 | `emergency_monitor.py`에 무입력 카운터와 진단 발행 추가(13.3절 표) |
+| P1 | 긴급어 감시의 마이크 무입력이 관측 불가 | 상시 감시 노드(`wakeword_monitor.py`, 롤백 경로는 `emergency_monitor.py`)에 무입력 카운터와 진단 발행 추가(13.3절 표) |
 | P2 | Smart Handle 안내 미구현 | 메시지 → mock → bench → HIL 순서 구현 |
 
 ## 15. 권장 통합 순서
