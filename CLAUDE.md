@@ -36,4 +36,9 @@ Jetson Orin NX, ROS 2 Humble 기반 실내 안내 AMR 팀 workspace다.
   (Safety), `/cmd_vel_safe` 발행자 1(Safety) · 구독자 1(motor). 2026-08-01 실측.
 
 아직 `[미검증]`인 것은 `devlog/2026-08-02-주행테스트.md` 5절에 모아 둔다.
+
+Nav2 로 진행할 일과 손대면 안 되는 축은 `docs/nav2_backlog.md`에 모아 둔다.
+자율주행 설정을 바꾸기 전에 그 문서의 **§9 하지 말 것**을 먼저 읽는다. 항목 ID
+(`NAV2-B1` 등)는 고정이므로 코드 주석·커밋 메시지에서 그대로 참조한다.
+
 항상 한국어로 응답한다.
