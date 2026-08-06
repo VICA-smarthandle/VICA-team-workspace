@@ -1,6 +1,7 @@
 # VICA BT 및 폴더·파일 Visual Hierarchy
 
 > 기준: 이 문서가 포함된 작업공간 루트의 현재 소스 트리
+> 검토 기준일: 2026-07-26
 > 목적: Nav2 BT 실행 구조, VICA 상태 흐름, 저장소별 책임과 핵심 파일 위치를 한 문서에서 확인한다.
 > 상세 동작은 `vica_scenario.md`, 시스템 계약은 `vica_architecture.md`를 우선한다.
 
@@ -22,9 +23,35 @@
 - 단일 목적지: `navigate_to_pose_w_replanning_and_recovery.xml`
 - 다중 경유지: `navigate_through_poses_w_replanning_and_recovery.xml`
 - VICA Mission Manager가 현재 호출하는 액션: `NavigateToPose`
-- 경로 계획기: NavFn
+- 경로 계획기: `SmacPlanner2D` (2026-07-28 NavFn에서 교체)
 - 경로 추종기: DWB
 - 복구 동작: 비용지도 초기화, 회전, 대기, 후진 등 Nav2 기본 복구 노드
+
+기본 BT의 복구 분기 실측값(2026-07-29):
+
+```text
+RecoveryNode "NavigateRecovery"  number_of_retries=6
+├─ PipelineSequence            RateController 1 Hz + ComputePathToPose / FollowPath
+│   각 작업 실패 시 해당 costmap만 초기화하고 1회 재시도
+└─ ReactiveFallback → RoundRobin  (부를 때마다 다음 것 하나씩)
+    ① ClearEntireCostmap(local) + ClearEntireCostmap(global)
+    ② Spin    spin_dist=1.57 rad
+    ③ Wait    wait_duration=5 s
+    ④ BackUp  backup_dist=0.30 m, speed=0.05 m/s
+```
+
+이 복구 분기는 현재 VICA에서 사실상 작동하지 않는다. 실측 기준은 다음과 같다.
+
+- `Spin`은 0.10 s, `BackUp`은 0.0005 s 만에 `Collision Ahead`로 중단된다. 두 동작 모두
+  padded footprint를 미리 스윕해 검사하는데, 차체가 0.905 m로 길어 통로에서 거의 항상
+  막힌다. 실제 회전량은 1.57 rad 목표에 대해 0.3~23.3°에 그쳤다.
+- 복구 1바퀴 7 s 중 **`Wait 5 s`가 79 %**를 차지한다. 시간을 줄이려면 `BackUp`이 아니라
+  `wait_duration`을 봐야 한다.
+- 실서비스에서는 사람이 핸들을 잡고 뒤에 선다(`vica_scenario.md` 2-1). 그 사람은 padded
+  footprint 후단(-0.65 m) 바깥이라 costmap에 장애물로 잡히고, `BackUp` 스윕(-0.65 →
+  -0.95 m)과 `Spin` 스윕(반경 0.707 m)에 모두 걸린다. 즉 두 동작은 **영구히 실패한다.**
+  반대로 트인 곳에서는 검사를 통과해 실제로 사람 쪽으로 후진하므로, 안전상 `BackUp`
+  제거가 필요하다. `min_vel_x: 0.0`은 DWB만 막고 `behavior_server`에는 적용되지 않는다.
 
 아래 그림은 저장소 설정과 Nav2 기본 동작을 기준으로 단순화한 개념도다. 실제 BT 노드와 포트의 최종 기준은 실행 중 선택된 Nav2 설치본의 XML이다.
 
@@ -74,14 +101,14 @@ flowchart LR
     M --> G{목적지·신뢰도·확인 Gate}
     G -- 통과 --> N[Nav2 NavigateToPose]
     G -- 확인 필요 --> T["/vica/tts_request"]
-    N --> C["/cmd_vel"]
-    C -. /cmd_vel_req remap GAP .-> S[Safety Supervisor]
+    N -->|내부 /cmd_vel_nav| C[velocity_smoother]
+    C -->|최종 /cmd_vel_req| S[Safety Supervisor]
     S -->|안전 속도| D[MDROBOT CAN Motor]
     N --> R["/vica/robot_state"]
     R --> A[Supervisor App]
     A --> L[상태·위치·로그 표시]
 
-    E[물리/음성/앱 E-stop] --> EN[emergency_stop_node 중앙 래치 TARGET]
+    E[물리/음성/앱 E-stop] --> EN[emergency_stop_node 중앙 래치]
     EN --> X["/emergency_stop"]
     X --> M
     X --> S
@@ -92,10 +119,11 @@ flowchart LR
     H --> LED[LED 방향지시등]
 ```
 
-점선은 현재 직접 연결이 완성되지 않았거나 앞으로 추가할 경로다. motor node는 현재
-`/cmd_vel_safe`를 구독하지만 Nav2 `/cmd_vel`을 Safety Supervisor의 `/cmd_vel_req`로
-연결하는 remap은 없다. `emergency_stop_node`의 입력 OR 발행은 존재하지만 중앙 래치와
-관리자 앱 reset은 아직 구현 목표다.
+점선은 현재 직접 연결이 완성되지 않았거나 앞으로 추가할 경로다.
+`nav2_map_test.launch.py`는 Nav2 내부 `/cmd_vel_nav`는 유지하면서 velocity smoother의
+최종 출력을 `/cmd_vel_req`로 remap한다. motor node는 `/cmd_vel_safe`를 구독한다.
+`vica_safety`의 중앙 래치와 앱·유지보수 reset 오케스트레이션도 코드와 launch로
+구현됐지만 CAN·Nav2·motor 종단 동작은 `[미검증]`이다.
 
 ## 4. 상태 전이 Visual Hierarchy
 
@@ -145,7 +173,9 @@ stateDiagram-v2
     FAULT --> IDLE: 오류 제거 + 재초기화
 ```
 
-앱은 최소한 현재 위치, 주행 중, 멈춤, 비상정지, 오류를 구분해 표시하고 상태 변화를 로그로 남긴다. 로그인 기능은 확정된 제품 요구사항이지만 현재 Flutter 소스에 로그인 화면과 인증 라우팅이 없으므로 `[TARGET]`(구현 목표)으로 관리한다. 구현 후에는 임의로 제거하지 않는다.
+앱은 현재 위치, 주행 중, 멈춤, 비상정지, 오류를 구분해 표시하고 상태 변화를 로그로
+남긴다. `AuthGate`·`LoginScreen`·`AuthProvider` 기반 로컬 관리자 로그인도 구현되어
+있다. 다만 ROS reset service의 호출자 인증은 별도 `[GAP]`이다.
 
 ### 4.3 스마트핸들 회전 예고 `[TARGET]`
 
@@ -193,6 +223,7 @@ VICA-smarthandle/
 │   ├── vica_scenario.md
 │   ├── vica_architecture.md
 │   ├── bt와 visual hierarchy of your folders and files.md
+│   ├── vica_system_health_monitoring_draft.md  # 상태 감시 목표안
 │   └── official_reference_urls.md              # 참고 URL 목록, 개발 중 발견 시 추가
 ├── source_file/                                # 로컬 원본 보관, 루트 Git 제외
 │   ├── hong igk.drawio
@@ -211,25 +242,25 @@ VICA-smarthandle/
 │   ├── ekf_config/                             # 호환용 설정, 정본은 vica_localization
 │   └── src/
 │       ├── vica_interfaces/
+│       ├── vica_destination_manager/
 │       ├── vica_mission_manager/
 │       ├── vica_nav2/
+│       ├── vica_nvblox_bringup/                # Docker D455·nvblox launch/config
 │       ├── mdrobot_can_control/
+│       ├── vica_safety/
 │       ├── encoder_feedback/
 │       ├── vica_localization/                  # wheel+IMU EKF, 표준 /odom
 │       ├── vica_sensor_adapters/
 │       ├── vica_description/
-│       ├── vica_cartographer/
-│       └── rplidar_ros/                        # 현재 실사용 RPLIDAR 드라이버(vica.repos import)
+│       └── vica_cartographer/
 │
 ├── vica-voice-llm/                             # 음성·의도·목적지 매칭
 │   ├── launch/
 │   ├── src/
 │   ├── config/
 │   ├── tests/
-│   ├── backend/
 │   ├── docs/
-│   ├── references/
-│   └── ros2_ws/src/vica_interfaces/            # 인터페이스 사본, 동기화 필요
+│   └── references/
 │
 └── VICA_Supervisor/                            # Flutter 감독 앱 + ROS 보조 노드
     ├── lib/
@@ -276,19 +307,41 @@ vica_ros2_ws/src/
 │       ├── emergency_estop_bridge.py
 │       └── estop_pulse.py
 │
+├── vica_destination_manager/                   # 지도별 목적지 YAML 정본
+│   ├── launch/destination_manager.launch.py
+│   ├── vica_destination_manager/
+│   │   ├── destination_manager_node.py
+│   │   └── storage.py
+│   └── test/test_storage.py
+│
 ├── vica_nav2/                                  # Nav2 실행·파라미터
 │   ├── launch/nav2_map_test.launch.py
-│   └── config/nav2_params.yaml
+│   ├── config/nav2_params.yaml                 # voxel + nvblox local costmap
+│   ├── test/test_nav2_params_contract.py
+│   ├── test/test_nvblox_dependency_contract.py
+│   └── vica_nav2/dependency_checks.py
 │
-├── mdrobot_can_control/                        # CAN 모터와 E-stop
-│   ├── launch/
-│   │   ├── motor_safety_bringup.launch.py
-│   │   └── safety_bringup.launch.py
+├── vica_nvblox_bringup/                        # Isaac ROS Docker의 nvblox 실행 정본
+│   ├── launch/vica_nvblox.launch.py
+│   ├── config/vica_nvblox_overrides.yaml
+│   └── README.md
+│
+├── mdrobot_can_control/                        # CAN actuator adapter only
+│   ├── launch/motor_bringup.launch.py
 │   └── mdrobot_can_control/
-│       ├── mdrobot_can_keyboard_knob_node.py
-│       ├── safety_supervisor_node.py
-│       ├── emergency_stop_node.py              # 입력 OR 현재 구현, 중앙 latch/reset TARGET
-│       └── app_emergency_node.py
+│       ├── can_preflight.py                    # CAN IFF_UP 읽기 전용 시작 검사
+│       └── mdrobot_can_keyboard_knob_node.py
+│
+├── vica_safety/                                # 독립 안전 계층
+│   ├── launch/safety_bringup.launch.py         # Safety 3노드, motor 미포함
+│   ├── docs/estop_integration_development_direction.md
+│   └── vica_safety/
+│       ├── emergency_latch.py
+│       ├── emergency_stop_node.py              # 물리·앱·음성 중앙 latch
+│       ├── safety_gate.py
+│       ├── safety_supervisor_node.py            # /cmd_vel_req 최종 승인
+│       ├── reset_sequence.py
+│       └── app_emergency_node.py                # 공개 reset 오케스트레이터
 │
 ├── encoder_feedback/                           # 휠 엔코더 Odometry
 │   └── encoder_feedback/encoder_feedback.py
@@ -318,18 +371,15 @@ vica_ros2_ws/src/
 │   │   └── vica_slam_bringup.launch.py         # localization 포함 SLAM 통합 launch
 │   └── config/vica_2d.lua
 │
-├── ekf_config/                                 # 호환용 설정 사본, 정본은 vica_localization
-│   ├── ekf.yaml
-│   └── command.txt
-└── rplidar_ros/                                # 현재 실사용 RPLIDAR 드라이버(vica.repos import). YDLIDAR G2 수리 중
+└── ekf_config/                                 # 호환용 설정 사본, 정본은 vica_localization
+    ├── ekf.yaml
+    └── command.txt
 ```
 
-`vica_ros2_ws` 자체 패키지는 9개이고, `vica.repos`로 외부 드라이버(`rplidar_ros`,
-`ydlidar_ros2_driver`, `realsense-ros`)를 import하면 `colcon list`에 16개가 나온다.
-`vica_localization`이 `robot_localization` EKF 설정과 bringup의 정본이다. `ekf_config`는
-호환용 사본이다. `rplidar_ros`는 이제 Slamtec RPLIDAR ROS 2 드라이버로 채워져 현재
-실사용 라이다이며, YDLIDAR G2는 수리 중이라 복귀 시 원복한다(2026-07-22 기준). 호환
-사본은 임의로 수정하지 않고 정본 변경과 함께 동기화한다.
+현재 `colcon list`에서 확인되는 VICA 패키지는 12개다. `vica.repos`는
+`rplidar_ros`, `ydlidar_ros2_driver`, `realsense-ros`를 선언하지만 현재 소스 트리에는
+import되어 있지 않으므로 위 패키지 수에 포함하지 않는다. `vica_localization`이
+`robot_localization` EKF 설정과 bringup의 정본이며 `ekf_config`는 호환용 사본이다.
 
 ## 7. 음성 저장소 핵심 파일
 
@@ -343,15 +393,18 @@ vica-voice-llm/
 │   ├── ros_emergency_node.py                   # EmergencyEvent 발행
 │   ├── destination_matcher.py
 │   ├── langchain_intent_parser.py
-│   ├── ros_tts_node.py
-│   ├── ros_robot_state_stub.py                 # [GAP] 개발용 stub
-│   └── ros_state_machine_stub.py               # [GAP] 개발용 stub
+│   ├── ros_stt_node.py                         # push-to-talk, 별도 실행
+│   ├── ros_tts_node.py                         # /vica/tts_request 우선순위 재생
+│   ├── tts_queue.py
+│   └── history.py
 ├── tests/
-├── backend/
-└── ros2_ws/src/vica_interfaces/                # [GAP] 원본과 중복된 메시지
+└── docs/
 ```
 
-현재 launch는 실제 LLM/TTS/E-stop 노드와 함께 두 stub을 실행한다. 통합 실행 시 stub이 실제 Mission Manager 상태와 충돌하지 않도록 개발 모드 옵션으로 분리해야 한다. 또한 Mission Manager는 `/vica/tts_request`를 발행하지만 현재 TTS 노드는 `/vica/intent`를 구독하므로 계약 통합이 필요하다. `vica_interfaces` 사본은 독립 정본이 아니며 ROS 저장소의 원본과 버전 동기화해야 한다.
+현재 launch는 LLM, TTS, 긴급어 감시만 실행하고 push-to-talk STT는 별도 실행한다.
+개발 stub, 테스트용 backend와 중복 `vica_interfaces` 사본은 제거됐다. 음성 노드는
+`vica_ros2_ws`에서 빌드한 공용 메시지를 사용하며, TTS는 `/vica/tts_request`와
+`/vica/tts_state` 계약으로 연결된다.
 
 ## 8. Supervisor 앱 핵심 파일
 
@@ -359,9 +412,10 @@ vica-voice-llm/
 VICA_Supervisor/
 ├── lib/
 │   ├── main.dart
-│   ├── app.dart                                # SupervisorShell 시작
+│   ├── app.dart                                # AuthGate → Login/SupervisorShell
 │   ├── core/
 │   │   ├── app_settings.dart
+│   │   ├── auth_config.dart
 │   │   ├── log_filter.dart
 │   │   └── map_coordinate.dart
 │   ├── models/
@@ -370,10 +424,12 @@ VICA_Supervisor/
 │   │   ├── vica_map.dart
 │   │   └── location_point.dart
 │   ├── providers/
+│   │   ├── auth_provider.dart
 │   │   ├── supervisor_provider.dart
 │   │   └── settings_provider.dart
 │   ├── ros/ros_bridge_client.dart
 │   ├── screens/
+│   │   ├── login_screen.dart
 │   │   ├── dashboard_screen.dart
 │   │   ├── current_location_screen.dart
 │   │   ├── robot_management_screen.dart
@@ -387,18 +443,21 @@ VICA_Supervisor/
 │       └── vica_ui.dart
 └── ros2/
     ├── vica_status_app_node.py                 # 위치·주행·대기·오류 JSON 상태
-    ├── location_storage_node.py
+    ├── location_storage_node.py                # 폐기 안내용, 실행 즉시 종료
     ├── map_list_node.py
-    └── vica_goto_goal.py                       # [GAP] Goal 권한 중복 가능
+    └── vica_goto_goal.py                       # Mission service CLI client
 ```
 
-`vica_goto_goal.py`와 Mission Manager가 모두 `NavigateToPose` Goal을 보낼 수 있다. 운용 단계에서는 단일 Goal 권한자를 정하고 다른 경로는 그 권한자에게 요청하도록 통합해야 한다. 앱 로그인은 요구사항으로 유지하되, 현재 트리에는 로그인 화면·인증 provider·인증 route가 확인되지 않으므로 구현 또는 최신 소스 동기화가 필요하다.
+일반 운영 Goal 권한은 Mission Manager 하나다. Flutter와 `vica_goto_goal.py`는
+`/vica/mission/request_destination`으로 UUID를 요청한다. 지도별 YAML 저장은
+`vica_ros2_ws/src/vica_destination_manager/`가 담당한다. 실제 Nav2·motor 종단은
+`[미검증]`이다.
 
 ## 9. 현재 데이터·제어 경로의 핵심 GAP
 
 ```mermaid
 flowchart TD
-    EN[encoder_feedback] -->|/wheel/odom| EKF[robot_localization EKF]
+    WHEEL[encoder_feedback] -->|/wheel/odom| EKF[robot_localization EKF]
     D455[D455 in Docker / Isaac ROS] --> ADAPTER[IMU frame adapter]
     ADAPTER -->|/imu/base_link| EKF
     EKF -->|/odom| CARTO[Cartographer]
@@ -406,15 +465,18 @@ flowchart TD
     CARTO -->|map to odom| TF[TF Tree]
     TF --> NAV[Nav2]
     EKF -->|/odom| APPSTATUS[App robot status]
+    D455 --> NVBLOX[nvblox node in Docker]
+    NVBLOX -->|/nvblox_node/static_map_slice| NAV
 
-    NAV -->|현재 /cmd_vel| GAP[안전 입력 remap 없음]
-    NAV -. 요구 계약 /cmd_vel_req .-> SAFE[Safety Supervisor]
+    NAV -->|내부 /cmd_vel_nav| SMOOTHER[velocity_smoother]
+    SMOOTHER -->|최종 /cmd_vel_req| SAFE[Safety Supervisor]
     SAFE -->|/cmd_vel_safe| MOTOR
 
-    APP[App E-stop Service] --> APPNODE[app_emergency_node]
-    APPNODE -. 현재 launch에 미포함 .-> ESTOP["/emergency_stop chain"]
-    APPNODE -->|server 없는 /estop_reset 호출 GAP| EN[emergency_stop_node]
-    EN -. 중앙 latch/reset TARGET .-> SAFE
+    APP[App·유지보수 Reset] --> APPNODE[app_emergency_node]
+    APPNODE -->|활성 Goal 확인·필요 시 전체 취소| NAV
+    APPNODE -->|internal estop_reset| ESTOP[emergency_stop_node 중앙 latch]
+    ESTOP -->|/emergency_stop| SAFE
+    APPNODE -->|internal supervisor_reset| SAFE
 ```
 
 우선 해결할 항목은 다음과 같다.
@@ -422,11 +484,11 @@ flowchart TD
 1. `robot_localization`, `python3-can`을 설치하고 깨끗한 환경에서 localization build/test를 재검증한다.
 2. 실제 C5 `/wheel/odom`과 D455 `/imu/base_link`를 함께 입력해 `/odom`과 `odom -> base_footprint` 단일 발행자를 HIL에서 검증한다.
 3. Cartographer와 Nav2에서 확정된 `/odom` 연결을 runtime으로 검증한다.
-4. Nav2 `/cmd_vel`을 Safety Supervisor의 `/cmd_vel_req`로 remap한다.
+4. Nav2 `/cmd_vel_req` → Safety Supervisor → `/cmd_vel_safe` → CAN 경로를 HIL에서 검증한다.
 5. motor의 `/cmd_vel_safe` 단일 입력을 build/runtime에서 검증한다.
-6. 물리·앱·음성 입력을 `emergency_stop_node`에서 중앙 래치한다.
-7. 관리자 앱의 단일 reset이 중앙 래치와 `/safety_reset` 결과를 원자적으로 확인하게 한다.
-8. Mission Manager와 앱 직접 Goal 노드 중 Goal 권한자를 하나로 정한다.
+6. `vica_safety` 중앙 래치와 reset 오케스트레이션을 build/test한다.
+7. 앱·유지보수 reset이 Nav2 취소, 중앙 래치 해제, Supervisor READY를 순서대로 확인하는지 HIL에서 검증한다.
+8. Host nvblox plugin·Docker slice·Nav2 local costmap의 실제 Goal 종단을 검증한다.
 
 ## 10. 스마트핸들 추가 시 권장 Target Tree
 
