@@ -6,8 +6,8 @@ repositories:
   vica-voice-llm:
     type: git
     url: https://github.com/VICA-smarthandle/vica-voice-llm.git
-    version: main
+    version: dev
   VICA_Supervisor:
     type: git
     url: https://github.com/myw411/VICA_Supervisor.git
-    version: main
+    version: dev

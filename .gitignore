@@ -5,14 +5,15 @@
 /VICA_Supervisor/
 
 # Local/generated workspace data
+/build/
+/install/
 /log/
 /workspaces
 /meta_prompt.txt
 /source_file/
 /.agents/
 /.codex/
-/install/
-/build/
+/.claude/
 
 # Secrets and local environment
 .env

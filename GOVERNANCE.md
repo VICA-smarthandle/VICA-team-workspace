@@ -85,8 +85,9 @@ reset, stash 또는 commit하지 않는다.
 공용 ROS 메시지의 정본은 `vica_ros2_ws/src/vica_interfaces/`다.
 
 - LLM의 Pydantic 모델과 Flutter/rosbridge JSON은 정본 계약을 소비한다.
-- `vica-voice-llm/ros2_ws/src/vica_interfaces/`는 현재 중복 사본이며 `[GAP]`으로 관리한다.
-- 중복 사본을 독립 수정하지 않는다. 제거 또는 버전 고정 방식은 별도 승인 후 결정한다.
+- 음성 저장소의 중복 `ros2_ws/src/vica_interfaces/`는 제거됐다. 음성 노드는
+  `vica_ros2_ws`에서 빌드·source한 `vica_interfaces`를 import한다.
+- 공용 메시지를 음성이나 앱 저장소에 다시 복사하지 않는다.
 - producer와 consumer가 다른 저장소에 있으면 한쪽만 변경하지 않는다.
 - 계약 변경 PR에는 영향 저장소, 호환성, 전환 순서와 rollback 방법을 적는다.
 
@@ -114,12 +115,20 @@ E-stop의 소프트웨어 권한은 다음처럼 단일화한다.
 → motor adapter
 ```
 
-- E-stop 래치와 외부 reset 서비스의 소유자는 `emergency_stop_node` 하나다.
+- E-stop 중앙 래치와 내부 래치 해제 권한은 `emergency_stop_node`가 소유한다.
+- 공개 reset 절차(`/app_estop_reset`, 유지보수 `/safety_reset`)는
+  `app_emergency_node`가 소유한다. Nav2 action status의 마지막 상태가 활성 상태이면
+  전체 취소하고 요청 이후의 새 terminal 상태를 확인한다. 마지막 상태가 terminal이면
+  취소 호출을 생략하며, Nav2가 미실행이거나 Goal이 한 번도 없어 status 이력이 없으면
+  Goal 검사도 생략한다. 최종 READY까지 오케스트레이션한다.
+- 주행 출력 재승인 권한은 `safety_supervisor_node`가 소유한다.
 - motor node에는 별도 E-stop 래치, `/estop_state`, `/estop_reset`을 두지 않는다.
 - 앱·STT에서 들어오는 `false`는 해당 입력의 해제만 뜻하며 중앙 래치를 해제하지 않는다.
 - LLM과 STT에는 reset 권한이 없다.
 - 모든 원인이 해제되고 정지 조건이 확인된 뒤, 로그인한 관리자가 앱 확인 팝업을 통해
-  단일 reset을 요청한다.
+  단일 reset을 요청하는 것이 목표다. 관리자 인증은 아직 `[GAP]`이다.
+- `/safety_reset`은 영구 유지보수 인터페이스로 남기되 같은 오케스트레이션과 안전 검사를
+  거치며, 현재 `Trigger` 계약에는 호출자 인증 정보가 없는 `[GAP]`이 있다.
 - 물리 E-stop 전원·토크 차단 회로는 이 소프트웨어 래치와 별도로 유지한다.
 
 ## 6. 앱과 LLM 저장소 분리 원칙

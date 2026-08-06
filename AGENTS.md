@@ -68,18 +68,26 @@ motor adapter
 - Safety Supervisor가 소프트웨어 주행 명령의 최종 승인 권한을 가진다.
 - 긴급어는 LLM 추론 전에 `/vica/emergency` 전용 경로로 전달한다.
 - 물리 버튼·앱·STT E-stop은 `emergency_stop_node`에서 통합하고 중앙 래치한다.
+- `app_emergency_node`가 공개 reset을 오케스트레이션한다. Nav2 action status의 마지막
+  상태가 활성 상태이면 전체 취소하고 요청 이후의 새 terminal 상태를 확인한다. 마지막
+  상태가 terminal이면 취소 호출을 생략하며, Nav2가 미실행이거나 Goal이 한 번도 없어
+  status 이력이 없으면 Goal 검사도 생략한다.
+- `emergency_stop_node`는 중앙 래치 해제, `safety_supervisor_node`는 주행 재승인을 각각
+  내부 서비스로만 제공한다.
 - motor node에는 E-stop 래치·`/estop_state`·`/estop_reset`을 두지 않는다.
 - 앱·STT의 `false`는 입력 해제일 뿐 래치 reset이 아니며 LLM/STT에는 reset 권한이 없다.
 - E-stop 해제 뒤 이전 Goal을 자동 재개하지 않는다.
 - reset은 위험 원인 해제 확인 후 로그인한 관리자가 앱에서 명시적으로 수행하는 목표다.
+- 유지보수 `/safety_reset`은 영구 보존하되 앱과 같은 안전 검사를 거치며, 관리자 인증이
+  구현되기 전에는 호출자 인증이 없는 `[GAP]`으로 취급한다.
 
 현재 안전 경로는 종단 간 검증 완료 상태가 아니다. 특히 다음을 구현 완료로 표현하지
 않는다.
 
-- Nav2 `/cmd_vel`을 `/cmd_vel_req`로 연결하는 remap
-- `emergency_stop_node`의 중앙 래치와 관리자 앱 단일 reset
-- 물리·앱·음성 E-stop의 실제 launch와 공통 상태 전달
-- 관리자 앱 단일 reset이 필요한 모든 안전 상태를 해제하는 절차
+- Nav2 `/cmd_vel_req` remap의 실제 Goal·Safety·motor 종단 동작
+- `vica_safety` 중앙 래치·reset 오케스트레이션의 실제 장치 종단 동작
+- 물리·앱·음성 E-stop launch의 CAN·Nav2·motor 연동 실기 결과
+- 관리자 인증과 `/safety_reset` 유지보수 접근 통제
 - CAN/센서/Smart Handle 단절에 대한 종단 fail-safe
 
 ## 5. 실기기 작업

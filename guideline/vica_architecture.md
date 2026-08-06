@@ -1,6 +1,6 @@
 # VICA 통합 아키텍처
 
-작성 기준일: 2026-07-22
+검토 기준일: 2026-07-26
 기준 작업공간: 이 문서가 포함된 작업공간 루트
 
 ## 1. 문서 목적과 판정 기준
@@ -22,8 +22,8 @@ VICA는 하나의 monorepo가 아니라 세 개의 Git 저장소와 공용 참�
 | 경로 | 현재 브랜치 | 역할 |
 | --- | --- | --- |
 | `vica_ros2_ws/` | `dev` | ROS2 제어, Nav2, SLAM, TF, 안전, 모터, Mission, 인터페이스 |
-| `vica-voice-llm/` | `main` | STT, TTS, 긴급어 감지, LLM 목적지 해석 |
-| `VICA_Supervisor/` | `main` | Flutter 운영 앱, rosbridge, 상태·지도·장소 관리 |
+| `vica-voice-llm/` | `dev` | STT, TTS, 긴급어 감지, LLM 목적지 해석 |
+| `VICA_Supervisor/` | `dev` | Flutter 운영 앱, rosbridge, 상태·지도·장소 관리 |
 | `GOVERNANCE.md` | 조정 저장소 | 팀·AI 협업, 변경 승인, 배포 기준 |
 | `guideline/` | 조정 저장소 | 통합 문서(시나리오·아키텍처·BT), 공식 URL 목록 |
 | `source_file/` | 로컬 전용(Git 제외) | 하드웨어·공식 문서 원본(PDF, drawio) |
@@ -37,21 +37,27 @@ LLM과 앱은 dependency·빌드·배포 주기가 다르므로 별도 저장소
 저장소를 하나로 합치지 않고 `GOVERNANCE.md`, guideline과 향후 배포 manifest에서
 공용 계약과 정확한 버전을 중앙 관리한다.
 
-`vica_ros2_ws/src`에서 `colcon list`로 확인되는 ROS 패키지는 현재 9개다.
+`vica_ros2_ws/src`의 VICA ROS 패키지는 현재 12개다.
 
 | 패키지 | 역할 |
 | --- | --- |
 | `encoder_feedback` | MDROBOT C5 위치 피드백을 wheel odometry로 변환 |
-| `mdrobot_can_control` | CAN motor, E-stop, Safety Supervisor, 앱 E-stop bridge |
+| `mdrobot_can_control` | `/cmd_vel_safe`를 CAN motor 명령으로 변환하는 actuator adapter |
 | `vica_cartographer` | Cartographer 2D 설정과 SLAM launch |
 | `vica_description` | URDF/Xacro, mesh, robot_state_publisher launch |
+| `vica_destination_manager` | 지도별 목적지 YAML 저장·조회·삭제와 Mission reload |
 | `vica_interfaces` | `VicaIntent`, `RobotState`, `EmergencyEvent` 메시지 |
 | `vica_localization` | wheel odometry와 IMU를 `robot_localization` EKF로 융합하고 표준 `/odom` 제공 |
 | `vica_mission_manager` | 목적지 gate, Mission 상태, Nav2 goal, 음성 E-stop bridge |
 | `vica_nav2` | 저장 지도 기반 Nav2 bringup과 parameter |
+| `vica_nvblox_bringup` | Isaac ROS Docker의 D455·nvblox launch와 VICA override |
 | `vica_sensor_adapters` | IMU frame 변환, VSLAM covariance adapter |
+| `vica_safety` | 물리·앱·음성 E-stop 중앙 래치, Safety Supervisor, reset 오케스트레이터 |
 
-현재 `vica_user_guidance`, `vica_exploration`, 별도 `vica_safety` 패키지는 존재하지 않는다.
+현재 `vica_user_guidance`, `vica_exploration` 패키지는 존재하지 않는다.
+
+`vica_system_monitor`(외부 대상 진단 어댑터와 전체 상태 모니터)는 **미머지 브랜치에만**
+있다. 13절이 그 계약을 정리하지만 `dev`의 패키지 수는 아직 12개다.
 
 ## 3. 전체 현재 구조
 
@@ -72,9 +78,9 @@ LLM과 앱은 dependency·빌드·배포 주기가 다르므로 별도 저장소
                          ▼
 ┌──────────────────────── Nav2 ────────────────────────┐
 │ map_server + AMCL + planner + controller + BT        │
-│ 현재 기본 속도 출력: /cmd_vel                        │
+│ local costmap: /scan voxel + nvblox 3D slice         │
+│ 최종 속도 출력: /cmd_vel_req                          │
 └────────────────────────┬─────────────────────────────┘
-                         │ remap 없음 [GAP]
                          ▼
                     /cmd_vel_req
                          │
@@ -88,7 +94,9 @@ LLM과 앱은 dependency·빌드·배포 주기가 다르므로 별도 저장소
                     CAN → MDROBOT
 ```
 
-앱은 rosbridge를 통해 상태 topic과 관리 topic을 사용한다. 앱의 일반 UI는 Nav2 action과 `/tf`를 직접 처리하지 않지만, 별도 시험 도구인 `vica_goto_goal.py`는 NavigateToPose를 직접 발행한다.
+앱은 rosbridge를 통해 상태 topic과 관리 service를 사용한다. 앱과 시험 도구
+`vica_goto_goal.py`는 Nav2 action을 직접 처리하지 않고 Mission Manager의 공개 목적지
+요청 service를 호출한다.
 
 ## 4. 인터페이스 계약
 
@@ -130,33 +138,127 @@ float64 detected_at
 
 긴급어를 LLM보다 먼저 전달한다.
 
+#### `RobotFault`
+
+```text
+string component
+string fault_code
+uint8 severity          # OK=0, WARN=1, DEGRADED=2, STOP=3, FAULT=4
+bool active
+bool latched
+uint32 occurrence_count
+builtin_interfaces/Time first_seen
+builtin_interfaces/Time last_seen
+string detail
+string suggested_action
+```
+
+결함 하나를 표현한다. Header가 없는 순수 데이터라 `RobotHealth`와 `RobotEvent`가 그대로
+재사용한다.
+
+`detail`·`suggested_action`의 한국어 문구 **정본은 로봇 쪽 `fault_catalog.py`**다. 앱은
+받은 문구를 표시만 한다. 문구를 앱에 두면 로봇이 새 fault를 추가할 때마다 앱을 다시
+배포해야 하고 정본이 두 저장소로 갈라진다.
+
+`first_seen`·`last_seen`은 사람에게 보여줄 시각이므로 SYSTEM_TIME이다. 만료·신선도
+판정에는 쓰지 않는다. 그 판정은 STEADY_TIME 계약을 따른다(9.4절).
+
+**등급 축에 비상정지가 없다.** E-stop은 STOP보다 한 단계 심각한 것이 아니라 종류가
+다르다 — 래치가 걸리고, 관리자 reset이 있어야 풀리고, `emergency_stop_node`가 소유한다.
+그 사실은 `latched`와 `RobotHealth.state == ESTOPPED`가 나타낸다.
+
+| 축 | 답하는 질문 | 표현 |
+| --- | --- | --- |
+| `severity` | 얼마나 나쁜가 | OK … STOP, FAULT |
+| `latched` | 관리자 reset이 필요한가 | bool |
+| `RobotHealth.state` | 어떤 모드인가 | … STOPPED, **ESTOPPED** … |
+
+등급에 섞으면 진단 결함 하나가 "비상 정지"로 표시되어 관리자가 있지도 않은 버튼을
+찾는다. 폭주 억제 해제 조건도 등급이 아니라 `latched`를 본다 — 등급으로 판정했을 때
+모터 진단 미수신이 초당 한 건씩 알림을 냈다.
+
+이 분리로 "E-stop을 걸어야 할 만큼 심각"과 "주행만 막으면 됨"의 구분은 사라졌다.
+그 구분이 필요해지는 시점은 자동 복구(초안 11절 `[TARGET]`)이며, 그때는 **복구 정책
+필드**로 표현한다. 표시용 등급에 다시 싣지 않는다.
+
+#### `RobotHealth`
+
+```text
+std_msgs/Header header
+uint8 state             # STARTING=0, READY=1, DEGRADED=2, STOPPED=3, ESTOPPED=4, FAULT=5
+uint8 motor_readiness           # UNKNOWN=0, NOT_READY=1, READY=2
+uint8 safety_readiness
+uint8 localization_readiness
+uint8 navigation_readiness
+uint8 lidar_readiness
+uint8 perception_readiness
+uint8 guidance_readiness
+uint8 voice_readiness
+uint8 app_readiness
+uint16 active_fault_count
+uint8 highest_severity
+string primary_fault_code
+RobotFault[] active_faults
+```
+
+readiness는 bool이 아니라 **3상태**다. `UNKNOWN`은 "정상"이 아니라 **관측 수단이 없다**는
+뜻이다. Smart Handle은 아두이노에서 젯슨으로 올라오는 상향 경로가 없어 서보·LED·햅틱이
+실제로 동작했는지 확인할 방법이 없다(12절). 이것을 `READY`로 보고하면 관리자에게 잘못된
+안심을 준다. `SmartHandleState.msg`가 경고하는 실패 모드와 같다.
+
+`active_faults` 배열은 앱 재접속 복원용이다. 앱은 이 배열 하나로 현재 결함 전체를 복원한다.
+
+#### `RobotEvent`
+
+```text
+std_msgs/Header header
+RobotFault fault
+uint8 transition        # RAISED=0, ESCALATED=1, REMINDER=2, CLEARED=3
+```
+
+결함의 상태 전이만 발행한다. `event_id`는 두지 않는다 — 중복 판정 키는
+`component`+`fault_code`로 충분하고 목록 표시용 고유 id는 앱이 만든다.
+
 ### 4.2 핵심 topic·service·action
 
 | 인터페이스 | 타입 | 현재 producer | 현재 consumer | 상태 |
 | --- | --- | --- | --- | --- |
 | `/vica/user_text` | `std_msgs/String` | STT | LLM node | 연결됨 |
-| `/vica/intent` | `VicaIntent` | LLM node | TTS, Mission Manager, 개발 stub | 운영 stub 중복 주의 |
-| `/vica/emergency` | `EmergencyEvent` | 긴급어 감시 | Mission Manager, E-stop bridge, 개발 stub | 연결됨 |
-| `/vica/robot_state` | `RobotState` | Mission Manager, 개발 stub | LLM node | 운영 stub 중복 주의 |
-| `/vica/tts_request` | `std_msgs/String` | Mission Manager | 없음 | 통합 gap |
+| `/vica/intent` | `VicaIntent` | LLM node | Mission Manager | 이동 요청 후보, 연결됨 |
+| `/vica/emergency` | `EmergencyEvent` | 긴급어 감시 | Mission Manager, E-stop bridge | LLM 우회 경로, 연결됨 |
+| `/vica/robot_state` | `RobotState` | Mission Manager | LLM node | 1 Hz 상태 입력, 연결됨 |
+| `/vica/tts_request` | `std_msgs/String` | STT, LLM, Mission Manager | TTS | 우선순위 큐 연결, 실제 음성 출력 `[미검증]` |
+| `/vica/tts_state` | `std_msgs/Bool` | TTS | 긴급어 감시 | 재생 중 자가 E-stop 오탐 억제 |
 | `/voice_emergency_stop` | `std_msgs/Bool` | emergency bridge | emergency_stop_node | 연결 가능 |
 | `/app_emergency_stop` | `std_msgs/Bool` | app_emergency_node | emergency_stop_node | 연결 가능 |
-| `/emergency_stop` | `std_msgs/Bool` | emergency_stop_node | Safety, Mission | 전달 구현, 중앙 래치 미구현 |
-| `/estop_state` | `std_msgs/Bool` | producer 없음 | Mission | 이전 motor 래치 계약 잔재 `[GAP]` |
-| `/safety_state` | `std_msgs/String` | Safety Supervisor | 운영 UI consumer 없음 | 부분 연결 |
-| `/cmd_vel` | `Twist` | Nav2 / test tool | 안전 운영 consumer 없음 | `/cmd_vel_req` remap 필요 |
-| `/cmd_vel_req` | `Twist` | 연결된 producer 없음 | Safety Supervisor | 통합 gap |
+| `/emergency_stop` | `std_msgs/Bool` | vica_safety/emergency_stop_node | Safety, Mission, app_emergency_node | 중앙 래치 코드·launch 구현, 실기 `[미검증]` |
+| `/estop_state` | `std_msgs/Bool` | vica_safety/emergency_stop_node | 호환·진단 consumer | 중앙 래치 호환 출력, motor 소유 아님 |
+| `/safety_state` | `std_msgs/String` | Safety Supervisor | app_emergency_node | 코드상 연결, runtime `[미검증]` |
+| `/cmd_vel` | `Twist` | test tool | 안전 운영 consumer 없음 | 운영 Nav2 출력으로 사용하지 않음 |
+| `/speed_limit` | `nav2_msgs/msg/SpeedLimit` | Mission Manager | Nav2 controller server | Goal 잔여거리 3 m에서 70% 제한, 실제 주행 `[미검증]` |
+| `/cmd_vel_req` | `Twist` | Nav2 velocity smoother | Safety Supervisor | launch remap 구현, 실기 종단 `[미검증]` |
 | `/cmd_vel_safe` | `Twist` | Safety Supervisor | motor | 코드상 연결, launch/runtime 검증 필요 |
 | `/wheel/odom` | `nav_msgs/Odometry` | encoder_feedback | `robot_localization` EKF | 코드·설정·launch 연결 및 로컬 기동 검증 완료, 실기 검증 필요 |
 | `/imu/base_link` | `sensor_msgs/Imu` | IMU frame adapter | `robot_localization` EKF | D455 실행 환경의 실제 입력 연결 검증 필요 |
 | `/odom` | `nav_msgs/Odometry` | `robot_localization` EKF | Cartographer, Nav2, 앱 상태 | 표준 출력 계약 및 launch 연결 완료, 실기 검증 필요 |
-| `/navigate_to_pose` | Nav2 action | Mission Manager, `vica_goto_goal.py` | Nav2 | 권한 중복 |
-| `/app_estop_activate` | `Trigger` | Flutter client | app_emergency_node | 별도 node 실행 필요 |
-| `/app_estop_reset` | `Trigger` | Flutter client | app_emergency_node | 존재하나 호출 대상 계약이 오래됨 |
-| `/estop_reset` | `Trigger` | app_emergency_node client | server 없음 | emergency_stop_node 중앙 reset으로 구현 목표 |
-| `/safety_reset` | `Trigger` | 통합 client 없음 | Safety Supervisor | 통합 gap |
+| `/navigate_to_pose` | Nav2 action | Mission Manager | Nav2 | 운영 Goal 단일 권한 |
+| `/vica/mission/request_destination` | `RequestDestination` | Flutter, CLI | Mission Manager | UUID·지도·Mission gate를 거치는 공개 요청 |
+| `/vica/mission/reload_destinations` | `Trigger` | destination manager | Mission Manager | YAML 변경 후 catalog 교체 |
+| `/vica/mission/cancel_destination` | `MissionCommand` | Flutter | Mission Manager | 진행 중 안내 취소, 실기 `[미검증]` |
+| `/vica/mission/pause_navigation` | `MissionCommand` | Flutter | Mission Manager | 목적지 보관 후 일시정지, 실기 `[미검증]` |
+| `/vica/mission/resume_navigation` | `MissionCommand` | Flutter | Mission Manager | 보관 목적지로 재출발, 실기 `[미검증]` |
+| `/vica_goal_event` | JSON `String` | Mission Manager | status app node, vica_goto_goal | goal 생명주기 이벤트, `goal_paused` 포함 |
+| `/app_estop_activate` | `Trigger` | Flutter client | app_emergency_node | vica_safety launch 포함, runtime `[미검증]` |
+| `/app_estop_reset` | `Trigger` | Flutter client | app_emergency_node | 전체 reset 오케스트레이션 진입점 |
+| `/safety_reset` | `Trigger` | 유지보수 CLI | app_emergency_node | 앱과 같은 절차, 호출자 인증 `[GAP]` |
+| `/vica_safety/internal/estop_reset` | `Trigger` | app_emergency_node | emergency_stop_node | 모든 source 해제·F1 fresh 조건 |
+| `/vica_safety/internal/supervisor_reset` | `Trigger` | app_emergency_node | Safety Supervisor | E-stop fresh/false·요청 명령 0 조건 |
 | `/robot_status` | JSON `String` | status app node | Flutter | 연결 가능 |
-| `/app_estop_state` | JSON `String` | app emergency node | Flutter | 앱 E-stop 상태 전용 |
+| `/app_estop_state` | JSON `String` | app emergency node | Flutter | 중앙 E-stop·Safety 통합 상태, 앱 호환 `active` 유지 |
+| `/diagnostics` | `diagnostic_msgs/DiagnosticArray` | motor node, `external_diagnostics_node`, health monitor | `diagnostic_aggregator` | 표준 개별 진단, 발행자 확대는 13.4절 순서 |
+| `/diagnostics_agg` | `diagnostic_msgs/DiagnosticArray` | `diagnostic_aggregator` | health monitor, `rqt_robot_monitor` | 계층형 진단 1 Hz, 실기 `[미검증]` |
+| `/robot/health` | `RobotHealth` | `robot_health_monitor_node` | Flutter, status app node | 1 Hz 상시 + 변화 시 즉시, 실기 `[미검증]` |
+| `/robot/events` | `RobotEvent` | `robot_health_monitor_node` | Flutter | 전이 시점 발행, 실기 `[미검증]` |
 
 ## 5. Voice·LLM 아키텍처
 
@@ -200,21 +302,19 @@ hard-stop 키워드는 현재 6개다.
 멈춰, 정지, 스탑, 스톱, 안돼, 위험해
 ```
 
-`잠깐`, `천천히`, `느리게`는 감지되지만 hard-stop bridge에서 무시된다.
+`잠깐`, `천천히`, `느리게`는 E-stop 감지 목록에서 제외되어 일반 발화로 처리된다.
+감속 intent는 아직 `[TARGET]`이다.
 
-### 5.3 현재 운영 gap
+### 5.3 현재 실행 계약
 
-`vica_voice.launch.py`는 다음 노드를 함께 실행한다.
+`vica_voice.launch.py`는 LLM node, TTS node와 emergency monitor만 실행한다. 개발용
+RobotState·state-machine stub과 중복 `vica_interfaces` 사본은 제거됐다. push-to-talk
+STT는 대화형 입력이므로 별도 터미널에서 실행한다.
 
-- LLM node
-- TTS node
-- emergency monitor
-- `ros_robot_state_stub`
-- `ros_state_machine_stub`
-
-Mission Manager와 함께 운영할 때 두 stub은 중복 producer/consumer가 되므로 제거하거나 `use_stubs` launch argument로 선택 실행해야 한다.
-
-Mission Manager가 발행하는 `/vica/tts_request`를 TTS가 구독하지 않는다. TTS는 현재 `/vica/intent.reply`만 재생한다.
+TTS는 STT·LLM·Mission Manager가 발행하는 `/vica/tts_request`를 우선순위 큐로 처리하고
+`/vica/tts_state`를 발행한다. emergency monitor는 재생 중 감시를 잠시 억제하고, 제한
+시간이 지나면 자동 재개한다. 코드·단위 테스트 계약은 연결됐고 실제 마이크·스피커
+재생은 `[미검증]`이다.
 
 ## 6. Mission Manager 아키텍처
 
@@ -248,18 +348,16 @@ pose 검증은 다음을 포함한다.
 idle / confirming / navigating / arrived / failed / estopped
 ```
 
-현재 Mission Manager는 `/emergency_stop OR /estop_state`로 판정하지만 `/estop_state`
-producer가 없다. 중앙 래치 구조에서는 `/emergency_stop`을 유일한 E-stop 상태 계약으로
-사용하고 오래된 `/estop_state` 구독을 제거하는 것이 목표다. E-stop reset 뒤 이전 goal은
-자동 재개하지 않는다.
+Mission Manager는 `vica_safety/emergency_stop_node`가 발행하는 `/emergency_stop` 중앙
+래치만을 E-stop 상태 계약으로 사용한다. motor 소유 `/estop_state` 의존은 제거했다.
+E-stop reset 뒤 이전 goal은 자동 재개하지 않는다.
 
 ### 6.3 현재 제약
 
-- `mission_manager.launch.py`의 기본 목적지와 지도 경로가 다른 개발자의 개인 홈 경로로 하드코딩되어 있다.
-- 앱 시험 도구 `vica_goto_goal.py`도 NavigateToPose를 직접 발행한다.
-- 앱 상태 node는 주로 `vica_goto_goal.py`의 `/vica_goal_event`를 사용하므로 Mission 상세 상태가 앱과 자동 동기화되지 않는다.
-
-목표 구조에서는 일반 서비스 goal 발행자를 Mission Manager 하나로 제한한다. `vica_goto_goal.py`는 좌표 시험 전용 도구로 명확히 분리한다.
+- Mission Manager가 공개 UUID 요청 service와 음성 intent를 같은 gate로 처리한다.
+- `vica_goto_goal.py`는 Mission service만 호출하며 NavigateToPose 권한이 없다.
+- Mission Manager가 `/vica_goal_event`를 발행해 앱 상태 bridge와 연결한다.
+- 이 경로의 실제 Nav2·Safety·motor 종단 동작은 `[미검증]`이다.
 
 ## 7. Nav2 아키텍처
 
@@ -277,16 +375,36 @@ producer가 없다. 중앙 래치 구조에서는 `/emergency_stop`을 유일한
 
 | 영역 | 현재 설정 |
 | --- | --- |
-| Global planner | `nav2_navfn_planner/NavfnPlanner` |
+| Global planner | `nav2_smac_planner/SmacPlanner2D` (2026-07-28 NavFn에서 교체) |
 | Local controller | `dwb_core::DWBLocalPlanner` |
+| DWB obstacle critic | `ObstacleFootprint` (scale 0.15). `BaseObstacle`은 원형 가정이라 부적합 |
 | 최대 직선 속도 | 0.26 m/s |
 | DWB 최대 회전 속도 | 0.4 rad/s |
+| Goal 접근 속도 | 경로 잔여거리 3.0 m부터 직선·회전 최대속도의 70% |
 | Goal tolerance | x/y 0.25 m, yaw 0.25 rad |
-| Local costmap | `odom`, voxel + inflation, `/scan` |
+| Local costmap | `odom`, voxel(`/scan`) + nvblox slice + inflation |
 | Global costmap | `map`, static + obstacle + inflation, `/scan` |
-| Footprint | 전방 0.15 m, 후방 -0.60 m, 좌우 ±0.1875 m |
+| Footprint | 전방 0.305 m, 후방 -0.60 m, 좌우 ±0.227 m, padding 0.05 (2026-07-27 실측) |
+| inflation | `inflation_radius` 0.45, `cost_scaling_factor` 3.5 |
 
-`nvblox_layer` 설정 블록은 남아 있지만 local costmap `plugins` 목록에는 포함되지 않아 현재 활성 plugin이 아니다.
+footprint는 2026-07-27 전방 좌측 범퍼 실충돌 뒤 `vica_description/meshes/base_link.stl`
+실측으로 교정한 값이다. 구값(전방 0.15, 좌우 ±0.1875)은 실제 차체보다 전방 15.5 cm,
+좌우 각 4 cm 작아 Nav2가 그만큼을 free 공간으로 오인했다.
+`vica_nav2/test/test_footprint_contract.py`가 이 회귀를 감시한다.
+
+여기서 파생되는 구조적 제약이 하나 있다. footprint 내접반경은 0.277 m인데
+외접반경은 0.707 m로 **2.6배** 차이가 난다(핸들 때문에 차체가 0.905 m로 길다).
+`SmacPlanner2D`는 중심 셀 비용만 보는 **점 로봇 planner**라 내접반경만 보장한다.
+그래서 planner가 "통과 가능"으로 그린 자리에서 DWB의 `ObstacleFootprint`가
+회전 궤적을 전부 거부해 로봇이 굳는 사례가 실측됐다(2026-07-29, `[GAP]`).
+
+`nvblox_layer`는 local costmap `plugins`에 포함되며
+`nvblox::nav2::NvbloxCostmapLayer`를 사용한다. slice 입력은
+`/nvblox_node/static_map_slice`, frame은 local costmap과 같은 `odom`이다.
+`vica_nvblox_bringup`이 Isaac ROS Docker의 D455·nvblox launch와 높이 override를
+소유한다. Host에는 `nvblox_nav2`·`nvblox_msgs`가 로드 가능한 상태여야 하며,
+dependency contract가 XML·library·message 존재를 검사한다. 실제 D455→slice→local
+costmap→Goal 종단은 `[미검증]`이다.
 
 ### 7.3 Behavior Tree
 
@@ -296,6 +414,18 @@ producer가 없다. 중앙 래치 구조에서는 `/emergency_stop`을 유일한
 nav2_bt_navigator/navigate_to_pose_w_replanning_and_recovery.xml
 nav2_bt_navigator/navigate_through_poses_w_replanning_and_recovery.xml
 ```
+
+복구 동작의 속도 명령은 `behavior_server`가 직접 발행한다. Nav2 humble
+`navigation_launch.py`는 `controller_server`에만 `('cmd_vel', 'cmd_vel_nav')`를 주고
+`behavior_server`에는 remap을 주지 않아, 기본 상태에서는 `/cmd_vel`로 나간다.
+VICA에는 그 토픽 구독자가 없어 **복구 동작이 한 번도 로봇을 움직이지 못했다**
+(2026-07-29 실측: `/cmd_vel` 발행자 5·구독자 0). `vica_nav2` launch에서 노드 지정
+remap `behavior_server:cmd_vel:=/cmd_vel_req`로 Safety 경로에 연결했다.
+
+접두사 없는 전역 `cmd_vel` remap은 쓰면 안 된다. launch_ros가 global remap을
+node-level보다 먼저 붙이고 rcl은 첫 일치 규칙을 쓰므로, `controller_server`의
+`cmd_vel:=cmd_vel_nav`를 덮어써 velocity_smoother를 건너뛴다.
+`test_nav2_launch_contract.py`가 두 규칙을 함께 감시한다.
 
 상세 BT와 Mission decision flow는 `bt와 visual hierarchy of your folders and files.md`에 정리한다.
 
@@ -404,9 +534,14 @@ Cartographer/Nav2   App status
 ### 9.1 현재 구조
 
 ```text
-Nav2 / vica_goto_goal
-        └─ /cmd_vel
-             └─ /cmd_vel_req remap 없음 [GAP]
+Mission Manager
+        ├─ NavigateToPose Goal
+        └─ /speed_limit (잔여거리 3 m부터 70%)
+                 ↓
+Nav2 controller
+        └─ /cmd_vel_nav
+             └─ velocity_smoother
+                  └─ /cmd_vel_req
 
 Safety Supervisor
         ├─ /cmd_vel_req 구독
@@ -415,14 +550,27 @@ Safety Supervisor
                   └─ CAN 0xCF → motor
 ```
 
-Safety Supervisor와 motor 사이의 코드 토픽은 연결됐다. 그러나 Nav2의 `/cmd_vel`을
-`/cmd_vel_req`로 보내는 remap/중계가 없어 정상 Nav2 명령이 Safety 입력까지 도달하지
-않는다. `vica_goto_goal.py`의 yaw 정렬 기본 출력도 `/cmd_vel`이어서 운영 경로에 쓰면
-Safety를 우회한다.
+`nav2_map_test.launch.py`는 Humble Nav2 velocity smoother의 원래 최종 출력
+`cmd_vel_smoothed`만 `/cmd_vel_req`로 scope remap한다. controller의 내부
+`/cmd_vel_nav` 연결은 유지되며 Safety Supervisor가 승인한 `/cmd_vel_safe`만 motor에
+도달한다. 코드·정적 계약은 연결됐지만 Nav2 Goal부터 CAN motor까지의 실기 종단 동작은
+아직 `[미검증]`이다. 시험 도구 `vica_goto_goal.py`의 별도 yaw 정렬과 `/cmd_vel`
+발행은 제거했으며, 목적지 pose의 최종 방향 정렬은 Nav2가 담당한다.
+
+Mission Manager는 Nav2 feedback의 양수 `distance_remaining`이 3.0 m 이하가 된 첫
+시점에 `/speed_limit`으로 최대 직선·회전속도를 70%로 제한한다. 현재 DWB 설정 기준
+0.182 m/s와 0.28 rad/s이며, 재계획으로 잔여거리가 늘어나도 해당 Goal이 끝날 때까지
+유지한다. 성공·실패·취소·E-stop과 새 Goal 시작 시 `speed_limit=0.0`으로 제한을
+해제한다. 이 경로의 실제 Goal·Safety·motor 종단 동작은 `[미검증]`이다.
 
 motor node는 MDROBOT F1 I/O 모니터의 knob(스마트핸들 가변저항) 값으로 주행 속도를
 보정한다(보행 속도 추종, 현재 구현됨). F1이 `knob_timeout_sec` 안에 수신되지 않으면
 knob 0으로 처리되어 정지한다.
+
+motor node는 CAN 객체 생성과 모터 명령 송신 전에 `can_iface`의 Linux `IFF_UP` 상태를
+읽기 전용으로 검사한다. 인터페이스가 없거나 DOWN이면 `[MOTOR START BLOCKED]` 오류와 함께
+시작을 거부하며 CAN을 자동으로 UP하거나 bitrate를 바꾸지 않는다. CAN 설정은 motor,
+encoder와 물리 E-stop 입력이 공유하므로 상위 시스템 인프라가 먼저 준비한다.
 
 ### 9.2 목표 구조
 
@@ -493,25 +641,33 @@ motor node에는 E-stop 래치, `/estop_state`, `/estop_reset`을 두지 않는 
 Safety Supervisor가 소유한다. CAN 0 RPM만으로 인명 안전을 보장하지 않으므로 물리
 전원·토크 차단 E-stop은 별도로 필요하다.
 
-### 9.5 reset gap
+### 9.5 reset 권한과 현재 계약
 
-현재 `emergency_stop_node`는 물리 CAN F1·앱·음성·시험 입력을 OR하여 주기 발행하지만
-중앙 래치와 reset service는 구현하지 않았다. `app_emergency_node`는 `/estop_reset`을
-호출하지만 해당 service server는 현재 motor node에 없으므로 reset 경로가 끊겨 있다.
-
-목표 reset 계약은 다음과 같다.
+`vica_safety`는 reset을 세 권한으로 분리한다.
 
 | 인터페이스 | 소유자 | 규칙 |
 | --- | --- | --- |
-| `/estop_reset` | `emergency_stop_node` | 모든 원인 해제·물리 입력 freshness·Goal 취소·정지 명령 확인 뒤 중앙 래치 해제 |
-| `/safety_reset` | Safety Supervisor | `/emergency_stop=false`와 `/cmd_vel_req=0` 확인 뒤 재허용 |
+| `/app_estop_reset` | `app_emergency_node` | Flutter용 공개 오케스트레이션 진입점 |
+| `/safety_reset` | `app_emergency_node` | 영구 유지보수 진입점, 앱과 같은 절차이며 호출자 인증 `[GAP]` |
+| `/vica_safety/internal/estop_reset` | `emergency_stop_node` | 모든 원인 해제와 물리 F1 freshness 확인 뒤 중앙 래치만 해제 |
+| `/vica_safety/internal/supervisor_reset` | `safety_supervisor_node` | fresh `/emergency_stop=false`와 `/cmd_vel_req=0` 또는 timeout 확인 뒤 재승인 |
 
-외부 사용자는 로그인한 관리자 앱 하나뿐이다. 앱은 확인 팝업 또는 명시적 알림 뒤 단일
-reset 요청을 보내고, reset orchestration은 중앙 래치 해제와 Safety reset 결과를 모두
-확인해야 한다. 앱이나 STT의 `false`는 입력 원인 해제일 뿐 래치 reset이 아니며,
-LLM/STT에는 reset 권한을 주지 않는다. 이전 Goal은 자동 재개하지 않는다.
+`app_emergency_node`는 앱 source를 false로 내리고 Nav2 action status의 마지막 상태값을
+확인한다. accepted, executing 또는 canceling Goal이면 전체 취소를 요청하고, 취소 요청
+이후의 새 terminal 상태를 확인한다. 마지막 상태가 terminal이면 취소 서비스를 호출하지
+않는다. Nav2 status 수신 이력이 없으면 Goal이 한 번도 생성되지 않은 정상 상태로 판정해
+Goal 검사를 생략하며, action server도 없으면 Nav2 미실행으로 구분한다. action status는
+주기 heartbeat가 아닌 상태 변경 이벤트이므로 메시지 나이는 reset 조건으로 사용하지
+않는다. 그 뒤 중앙 래치 reset, fresh
+`/emergency_stop=false`, Supervisor 내부 reset,
+`/safety_state=READY_TO_GO`를 순서대로 확인한다. 어느 단계든 실패하면 다음 단계로
+진행하지 않는다. 앱이나 STT의 `false`는 입력 원인 해제일 뿐 reset이 아니며 이전 Goal은
+자동 재개하지 않는다.
 
-### 9.6 E-stop 중앙 래치 목표 계약
+관리자 앱 인증은 아직 구현되지 않았다. `/safety_reset`의 `Trigger` 요청에도 호출자
+신원이 없으므로 현재는 `[GAP]`이며, 이후 SROS2·로컬 shell 권한·네트워크 ACL을 검토한다.
+
+### 9.6 E-stop 중앙 래치 현재 계약
 
 ```text
 MDROBOT F1 물리 버튼 상태 ─┐
@@ -519,7 +675,7 @@ MDROBOT F1 물리 버튼 상태 ─┐
 STT /voice_emergency_stop ──┘   ├─ source 상태·freshness 관리
                                 ├─ 하나라도 true면 중앙 latch
                                 ├─ /emergency_stop 주기 발행
-                                └─ 관리자 앱 /estop_reset
+                                └─ internal/estop_reset
                                            │
                          ┌─────────────────┴────────────────┐
                          ▼                                  ▼
@@ -532,12 +688,13 @@ STT /voice_emergency_stop ──┘   ├─ source 상태·freshness 관리
 | 물리 CAN F1 | 버튼 눌림 또는 입력 상실 fail-safe | 버튼이 실제 해제되고 상태가 fresh함 | 없음 |
 | 앱 Bool | 관리자가 E-stop 활성 요청 | 앱 입력 원인 해제 | 없음 |
 | STT Bool | 긴급어 감지 펄스 | 펄스 종료 | 없음 |
-| 관리자 앱 reset | 해당 없음 | 모든 원인 해제 뒤 중앙 래치 해제 요청 | 유일한 외부 권한 |
+| 앱·유지보수 reset | 해당 없음 | app_emergency_node의 전체 절차 시작 | 공개 오케스트레이터만 호출 |
 
 `false` 입력은 중앙 래치를 직접 끄지 않는다. `emergency_stop_node`가 reset 요청을
-수락하려면 모든 입력이 비활성·fresh하고 Goal이 취소됐으며 요청 속도가 0인지 확인해야
-한다. 앱 인증은 Flutter 계층에서 확인하되 로봇 측 reset 서비스도 요청 출처와 상태를
-검증해야 한다. 이 전체 계약은 현재 코드에 완성되지 않은 `[TARGET]`이다.
+수락하려면 모든 입력이 비활성이고 물리 F1이 fresh해야 한다. Nav2 활성 Goal 확인과
+필요한 경우의 전체 취소는 `app_emergency_node`, 요청 속도 0 또는 stale 확인은
+`safety_supervisor_node`가 책임진다. 코드·launch·단위 테스트는
+구현됐지만 CAN·Nav2·motor를 함께 사용한 실기 종단 동작은 `[미검증]`이다.
 
 ## 10. Supervisor 앱 아키텍처
 
@@ -546,18 +703,27 @@ STT /voice_emergency_stop ──┘   ├─ source 상태·freshness 관리
 - rosbridge WebSocket 연결
 - 지도·장소 조회와 좌표 저장
 - `/robot_status` 기반 로봇 상태 표시
+- `/robot/health`·`/robot/events` 기반 세부 결함 표시(시스템 진단 화면, 대시보드 배너)
 - `/app_estop_state` 기반 앱 E-stop 표시
 - E-stop activate/reset service 호출
+- 진행 중 안내의 취소·일시정지·재개 요청(`MissionCommand` service 3종)
 - 연결·오류·E-stop·장소 관리 로그
 - 목표: IDLE(사용자 미이용) 한정 원격 목적지 요청 — 앱 장소 선택을 Mission Manager 경유로 전달(`vica_scenario.md` 10.5절). 수동 teleop은 범위 제외.
 
 앱은 안전 계층이나 motor path를 우회하지 않는다. 원격 목적지 요청도 Mission Manager gate와 안전 계층을 거친다.
 
+앱은 요청 가능 여부를 스스로 판정하지 않는다. 앱이 가진 장소 정보는 마지막으로 받아온
+사본이라 최신이 아닐 수 있어, 권한·접근성·Safety·Nav2 검증은 `vica_goto_goal`, LLM과
+동일하게 Mission Manager가 담당한다. 앱은 요청을 보내고 `accepted`와 `message`만 표시한다.
+
 ### 10.2 현재 로그인 상태
 
-로그인 화면과 기존 사용자 로그인은 확정된 요구사항이지만, 현재 Flutter source에는 로그인 screen, auth provider, 로그인 route가 없으므로 구현 목표로 분류한다. 설정 화면에는 읽기 전용 `admin` 계정 정보만 있다.
+Flutter source에는 `AuthGate`, `LoginScreen`, `AuthProvider`와 로컬 관리자 계정 설정이
+있다. 앱은 저장된 로그인 상태에 따라 로그인 화면과 `SupervisorShell`을 분기하고
+로그아웃 시 상태를 삭제한다. 신규 회원가입과 복잡한 역할 관리는 범위 밖이다.
 
-후속 통합 시 로그인 기능을 삭제하지 말고 실제 구현 source를 확인해 앱 시작 route 앞에 연결한다. 신규 회원가입과 복잡한 권한 관리는 범위 밖이다.
+이 로그인은 앱 진입 제어이며 ROS service에 호출자 신원을 전달하지 않는다. 따라서
+`/app_estop_reset`과 `/safety_reset`의 관리자 인증·접근 통제는 여전히 `[GAP]`이다.
 
 ### 10.3 상태 bridge
 
@@ -570,12 +736,74 @@ STT /voice_emergency_stop ──┘   ├─ source 상태·freshness 관리
 - map ID와 가까운 저장 장소명
 
 상태 우선순위는 오류 → 위치 미확보 → goal/속도 기반 moving → waiting이다.
+일시정지는 `status="waiting"`과 `waiting_reason="일시정지"`로 표현하며, 재개할 목적지를
+앱이 보여줄 수 있도록 `current_goal`을 유지한다.
 
-Mission Manager 상세 상태는 `/vica_goal_event`에 연결되어 있지 않아 앱에 완전히 반영되지 않는다.
+Mission Manager가 `/vica_goal_event`를 발행하도록 연결했으며 앱 표시 runtime은
+`[미검증]`이다.
+
+구독 입력은 모두 monotonic 기준 만료를 적용한다. `/diagnostics`는 여러 노드가 함께 쓰는
+공용 topic이고 각 메시지가 그 발행자의 상태만 담으므로, 마지막 메시지 하나만 보관하면
+ERROR 발행자와 정상 발행자가 번갈아 도착할 때 오류 표시가 깜빡인다. 항목별로 누적하고
+확정·해제에 지연을 둔다.
+
+이 깜빡임 결함의 근본 해소는 판정 지점을 하나로 모으는 것이다. `robot_health_monitor_node`
+가 항목별 누적과 전이 판정을 전담하고, 앱 브리지는 그 결과를 받는다. 전환은
+`error_source` 파라미터로 감싼다.
+
+| `error_source` | 오류 판정 입력 | 상태 |
+| --- | --- | --- |
+| `diagnostics`(기본) | 기존 `/diagnostics` 직접 파싱 | `[CURRENT]` |
+| `health` | `/robot/health`의 `highest_severity >= STOP` | 코드 구현, 실기 `[미검증]` |
+
+기본값이 현재 동작이므로 패키지를 빌드해도 거동이 바뀌지 않는다. 실기에서 파라미터
+한 줄로 A/B한 뒤 기본값을 `health`로 바꾸는 것은 **별도 커밋**으로 한다. 롤백 단위가
+커밋이 아니라 파라미터다.
+
+`/robot_status` JSON 스키마는 바꾸지 않는다. 세부 결함 표시는 앱이 `/robot/health`·
+`/robot/events`를 rosbridge로 **직접** 구독해 담당하며 이 노드를 거치지 않는다.
+
+### 10.3.1 안내 취소·일시정지·재개
+
+E-stop과 성격이 다른 별도 경로다. 안전 사건이 아니라 목표 조작이므로 래치와 reset이 없다.
+
+| 구분 | 취소·일시정지 | E-stop |
+| --- | --- | --- |
+| 목적 | 목표 철회 | 위험 차단 |
+| 정지 방식 | goal 취소 후 `velocity_smoother` 감속 램프 | `/cmd_vel_safe=0` 강제 |
+| 래치 | 없음 | 중앙 래치 |
+| 해제 | 불필요 | 관리자 reset |
+| 이후 상태 | `IDLE` 또는 `PAUSED` | `ESTOPPED` |
+
+Mission Manager는 `cancelTask()`로 `NavigateToPose` goal을 취소할 뿐 감속을 지시하지
+않는다. 취소되면 `controller_server`가 `/cmd_vel` 발행을 멈추고, 그 뒤를
+`velocity_smoother`가 `max_decel`(현재 `[-2.5, 0.0, -3.2]`) 기울기로 0까지 이어 붙여
+감속 램프를 만든다. 이 값은 도착·취소·controller 정지에 전역 적용되며 `[미검증]`
+트레이드오프로 남아 있어 실기에서 확정한다.
+
+`max_velocity`가 `[0.26, 0.0, 1.0]`이므로 이 감속률에서 정지까지 약 0.104초, 0.0135 m다.
+즉 감속 램프와 즉시 정지의 물리적 차이가 매우 작다. 사용자에게 "천천히 멈춘다"를 제공해야
+하는 상황에서는 감속률이 아니라 정지 전 유예 시간으로 설계한다
+(`vica_scenario.md` 2-1.2절).
+
+감속 램프도 명령이므로 Safety Supervisor의 freshness 판정에는 살아 있는 명령으로 보인다.
+따라서 `velocity_smoother.velocity_timeout`(0.4 s)은 `safety_supervisor_node`의
+`cmd_timeout_sec`(0.5 s)보다 짧게 유지해야 하며,
+`vica_nav2/test/test_nav2_params_contract.py`가 이 관계를 강제한다. 비상정지는 이 경로를
+타지 않고 Safety가 `/cmd_vel_safe=0`을 직접 강제한다.
+
+일시정지는 Nav2 goal을 취소하되 목적지를 `MissionLogic.paused_destination`에 보관하고,
+재개 요청 시 그 목적지로 새 goal을 만든다. E-stop이 활성화되면 보관분을 폐기해
+"E-stop 해제 후 이전 Goal을 자동 재개하지 않는다"는 원칙을 유지한다.
+
+요청 주체는 앱(`MissionCommand` service)과 음성(`VicaIntent.intent`의
+`cancel`/`pause`/`resume`)이며 둘 다 같은 게이트를 통과한다. 음성 취소는 오인식 시
+안내가 끊기므로 Mission Manager가 되물어 확인한 뒤에만 실제로 취소하고, 확인을
+기다리는 동안 주행은 계속한다. 앱은 관리자 로그인과 확인 대화상자를 거치므로 재확인이 없다.
 
 ### 10.4 앱 E-stop bridge
 
-`app_emergency_node`는 현재 `mdrobot_can_control` 패키지 안에 있다.
+`app_emergency_node`는 `vica_safety` 패키지의 공개 reset 오케스트레이터다.
 
 ```text
 Flutter
@@ -587,13 +815,15 @@ Flutter
 app_emergency_node
 ├─ /app_emergency_stop Bool
 ├─ NavigateToPose 전체 goal 취소
-└─ /estop_reset client                 # 현재 server 없음 [GAP]
+├─ /vica_safety/internal/estop_reset
+├─ /vica_safety/internal/supervisor_reset
+└─ /app_estop_state 중앙 통합 상태 JSON
 ```
 
-이 node는 `safety_bringup.launch.py`와 `motor_safety_bringup.launch.py`에 포함되어 있지 않다.
-현재 `/app_estop_state`는 앱 입력 상태만 나타내므로 중앙 E-stop 래치의 실제 상태와 다를
-수 있다. 목표 구조에서는 앱이 중앙 `/emergency_stop` 또는 동등한 통합 상태를 표시하고,
-관리자 확인 팝업 뒤 `emergency_stop_node`의 단일 reset만 호출한다.
+이 node는 `ros2 launch vica_safety safety_bringup.launch.py`에 포함된다.
+`/app_estop_state`의 기존 `active` key는 유지하면서 중앙 `/emergency_stop`을 표시한다.
+관리자 인증은 아직 `[GAP]`이며 Flutter의 `/app_estop_reset`과 터미널 `/safety_reset`은
+동일한 안전 절차를 호출한다.
 
 ### 10.5 저장소 경계 목표
 
@@ -607,13 +837,12 @@ Goal 보조 노드는 로봇에서 실행되는 코드이므로 장기적으로
 
 | 데이터 | 현재 위치 | 용도 |
 | --- | --- | --- |
-| 언어 목적지 | `vica-voice-llm/config/destinations.yaml` | 이름, alias, 접근성, 확인/도착 문구, pose |
-| 앱 장소 | `vica_ros2_ws/location/<map_id>/locations.json` | 지도별 앱 좌표와 메모 |
+| 목적지 정본 | `~/vica_data/destinations/<map_id>/destinations.yaml` | UUID, 이름, alias, 권한, 접근성, pose |
 | 지도 | `vica_ros2_ws/maps/*.yaml`, 이미지 | Nav2, 앱 표시 |
 
-현재 YAML과 JSON은 자동 동기화되지 않는다. ID, map ID, frame, x/y/yaw, calibrated, 접근 가능 여부를 하나의 검증 계층에서 연결해야 한다.
-
-Mission launch 기본 경로는 현재 특정 사용자 경로로 하드코딩되어 있어 이 작업공간 경로와 맞지 않는다. 배포 설정 또는 launch argument로 명시해야 한다.
+앱과 ROS Bridge 사이 전송은 JSON을 유지하지만 영구 저장은 지도별 YAML 하나다.
+기존 `locations.json`은 이관하지 않는다. Mission Manager는 UUID 존재, 현재 map ID,
+`public`, 접근 가능, pose, E-stop과 Nav2 준비 상태를 다시 검사한다.
 
 ## 12. Smart Handle·LED 목표 아키텍처
 
@@ -684,37 +913,141 @@ stamp
 - 리코일 기반 보행 속도 추종은 guidance 계층이 아니라 motor node의 knob 속도 보정으로
   이미 구현되어 있다(9.1절).
 
-## 13. 현재 주요 위험과 우선순위
+## 13. 상태 감시 아키텍처
+
+설계 배경과 미확정 항목은 [`vica_system_health_monitoring_draft.md`](vica_system_health_monitoring_draft.md)가
+정본이다. 이 절은 확정된 계약과 **관측 범위 경계**만 담는다.
+
+### 13.1 두 경로 분리
+
+```text
+[진단성 정보]  motor node · external_diagnostics_node · health monitor 자신
+                     └─ /diagnostics ─→ diagnostic_aggregator ─→ /diagnostics_agg ─┐
+                                                                                   │
+[안전 신호]    /emergency_stop · /safety_state · TF map→base_footprint ────────────┤
+               /bt_navigator/get_state 폴링 · /vica/robot_state                     ▼
+                                                            robot_health_monitor_node
+                                                                       ▼
+                                                    /robot/health + /robot/events
+                                                                       ▼
+                                                          rosbridge ─→ Flutter
+```
+
+안전 신호는 aggregator를 거치지 않는다. `diagnostic_aggregator`는 기본 1 Hz로 집계하므로
+E-stop 표시가 최대 1초 늦는다. **진단성 정보는 표준 체인, 안전 상태는 직접 입력**이 이
+설계의 뼈대다.
+
+`robot_health_monitor_node`는 Safety Supervisor를 대체하지 않으며 모터 정지 경로에 들어가지
+않는다. 모니터가 죽어도 `/cmd_vel_req → Safety → /cmd_vel_safe → CAN` 경로는 그대로 동작한다.
+
+### 13.2 어댑터를 두는 이유
+
+`rplidar_ros`, nvblox(Docker), D455는 외부 패키지라 `/diagnostics`를 내지 않고 코드를 고칠
+수도 없다. `external_diagnostics_node`가 그 대상을 **대신해** 진단을 발행하므로 외부 대상도
+우리 노드와 같은 경로로 흐른다.
+
+부수 효과가 중요하다 — `nvblox_msgs` 같은 외부 타입 의존이 어댑터 프로세스에만 갇힌다.
+모니터는 센서 메시지 타입을 전혀 import하지 않고, 어댑터가 죽어도 모니터는 살아 있다.
+
+감시 도구가 스스로 오탐을 만들 수 있다는 점이 이 어댑터의 최대 위험이다. `/scan`을
+RELIABLE로 구독하면 rplidar가 sensor_data(BEST_EFFORT)로 발행할 때 QoS 비호환으로 한 건도
+받지 못해 `LIDAR_SCAN_STALE`이 영구 오탐된다. 따라서 구독 QoS를 `probes.yaml`에 두고
+실기 `ros2 topic info -v`로 확정하며, 어댑터는 "구독자는 붙었는데 메시지가 0건"을 진단
+message에 구분해 남긴다.
+
+### 13.3 관측 범위와 사각지대
+
+**"health가 정상이라고 했는데 왜 못 잡았나"를 구조적으로 막기 위해 경계를 문서에 고정한다.**
+어댑터가 대신 발행할 수 있는 것은 토픽과 `/proc`으로 이미 나오는 것뿐이다. 노드 내부 상태는
+그 노드를 수정하지 않으면 원리적으로 볼 수 없다.
+
+관측하는 것:
+
+| 신호 | 방법 |
+| --- | --- |
+| 모터 CAN 링크·cmd/knob age | motor node의 기존 `/diagnostics` |
+| `/scan` 주기 | 어댑터 topic_rate |
+| nvblox slice age·Hz | 어댑터 topic_rate |
+| depth·color `camera_info` 주기 | 어댑터 topic_rate |
+| `/odom` 실효 Hz (= EKF 실효 주기) | 어댑터 topic_rate |
+| `/wheel/odom` 미발행 | 어댑터 topic_rate |
+| 노드별 프로세스 CPU % | 어댑터 process_cpu (`/proc`) |
+| E-stop 래치·`/safety_state` | 모니터 직접 구독 |
+| TF `map→base_footprint` age | 모니터 직접 tf2 |
+| Nav2 lifecycle 상태 | 모니터 `GetState` 폴링 |
+
+관측하지 **못하는** 것:
+
+| 신호 | 왜 불가 | 실제 위험 |
+| --- | --- | --- |
+| 마이크 무입력 | 오디오 콜백 내부 | **긴급어 감시가 조용히 멈춘다** |
+| 긴급 감시 실효 hop·창 건너뜀 | 카운터가 아예 없다 | 긴급어 사각지대 확대 |
+| STT/TTS CPU 폴백 여부 | 노드 내부 변수, `print`로만 나감 | 폴백 시 지연 3.7배·10배 |
+| 목적지 카탈로그 부재 | warn 로그 한 줄. 간접 추정만 | 모든 안내가 `unknown_destination` |
+| Smart Handle 서보·LED·햅틱 실동작 | 상향 통신 경로 자체가 없다(12절) | readiness가 `UNKNOWN`으로 남는다 |
+
+카메라는 원본 `image`가 아니라 `camera_info`를 구독한다. 같은 주기지만 수백 바이트다.
+30 Hz depth 프레임을 복사하면 감시 노드가 대역폭 소비자가 된다.
+
+### 13.4 임계값과 확장 규율
+
+- **임계값과 기대 토픽 목록을 코드에 두지 않는다.** 전부 YAML이다. `probes.yaml`(수집
+  대상·기대 주기·구독 QoS), `diagnostic_aggregator.yaml`(분류·`timeout`·`expected`),
+  `required_components.yaml`(필수 여부·severity). timeout은 aggregator yaml만 소유한다 —
+  두 곳에 두면 어느 쪽이 이기는지 모호해진다.
+- **토픽 부재를 자동으로 fault로 만들지 않는다.** `publish_voxel_map: False`나 `backup`
+  behavior 제거처럼 토픽이 사라지는 것이 정상 변경일 수 있다. 부재 판정은 반드시 YAML의
+  `required` 플래그를 거친다.
+- **계약 테스트가 4파일의 이름 집합 일치를 강제한다.** 오타로 감시가 조용히 빠지는 것을
+  막는다. `vica_nav2/test/test_nav2_params_contract.py`와 같은 패턴이다.
+- **다른 노드에 진단을 추가할 때 모니터 코드를 고치지 않는다.** aggregator yaml에 항목만
+  추가하면 `DIAG_COMPONENT_ERROR`/`WARN`/`STALE` 통로로 앱까지 표시된다. 표준 체인을 먼저
+  깔아 두는 가장 큰 이유가 이것이다.
+- 진단 발행자 확대 우선순위는 초안 17절 1단계 표를 따른다. 1위가 마이크 무입력이다.
+  `safety_supervisor_node`·`emergency_stop_node` 수정은 E-stop 경로 전체 실기 재검증을
+  요구하므로 마지막이다.
+
+### 13.5 자동 복구는 범위 밖
+
+이 계층은 **관측과 보고만** 한다. `recovery_policy.yaml`과 자동 재시도는 초안 11절의
+`[TARGET]`으로 남는다. nvblox slice가 stale일 때 Mission을 취소하는 방어도 아직 없다 —
+감지는 구현했으나 방어는 유령 장애물 진단이 끝난 뒤 결정한다
+(`devlog/2026-07-30-nvblox-ghost-obstacle.md` 12절).
+
+## 14. 현재 주요 위험과 우선순위
 
 | 우선순위 | 문제 | 조치 |
 | --- | --- | --- |
-| P0 | Nav2 명령이 Safety 입력에 도달하지 않음 | Nav2 `/cmd_vel`을 `/cmd_vel_req`로 remap |
-| P0 | E-stop 중앙 래치가 구현되지 않음 | `emergency_stop_node`에 통합 latch와 관리자 앱 단일 reset 구현 |
+| P0 | Nav2→Safety 속도 경로 실기 종단 미검증 | `/cmd_vel_req → /cmd_vel_safe → CAN`을 바퀴를 띄운 HIL에서 검증 |
+| P0 | E-stop/reset 코드의 실기 종단 검증이 없음 | 바퀴를 띄운 HIL에서 F1·앱·음성·Nav2·motor fail-closed 검증 |
 | P0 | localization 런타임 의존성 미설치 | `robot_localization`, `python3-can` 설치 후 깨끗한 환경에서 전체 build/test |
 | P0 | wheel+IMU 실기 융합 미검증 | C5, D455 adapter, `/odom`과 TF 단일 authority를 HIL에서 검증 |
-| P0 | 기본 motor launch가 물리 CAN F1을 사용하지 않음 | 실제 운용 launch에서 검증된 `can_f1` 입력 활성화 |
-| P1 | Mission과 앱 시험 도구의 goal 권한 중복 | 운영 goal 권한을 Mission Manager로 제한 |
-| P1 | voice launch의 stub 중복 | 운영 launch에서 제외 |
-| P1 | Mission TTS 미연결 | `/vica/tts_request` subscriber와 priority queue |
+| P0 | `vica_safety`의 `can_f1` launch가 실기 미검증 | `can1`·`0x701`·F1 freshness를 읽기 우선으로 검증 |
+| P1 | Mission·앱·CLI 경로의 runtime 미검증 | 공개 Mission service와 `/vica_goal_event` 종단 검증 |
+| P1 | nvblox local costmap 종단 미검증 | Host plugin·Docker slice·Nav2 Goal을 함께 검증 |
+| P1 | 통합 음성 출력 미검증 | `/vica/tts_request` 우선순위와 실제 마이크·스피커 검증 |
 | P1 | 앱 Mission 상세 상태 미연결 | 공통 mission status 계약 정의 |
-| P1 | 목적지 YAML/JSON 이중화 | 데이터 동기화 또는 단일 기준 schema |
+| P1 | 목적지 통합 runtime 미검증 | 지도별 YAML 저장·reload·음성 검색을 함께 검증 |
+| P1 | 상태 감시 임계값이 전부 실측 없이 정해져 있음 | Jetson에서 QoS·주기·CPU를 실측해 확정. 확정 전 결함 표시를 판정 근거로 쓰지 않는다(13.4절) |
+| P1 | 긴급어 감시의 마이크 무입력이 관측 불가 | `emergency_monitor.py`에 무입력 카운터와 진단 발행 추가(13.3절 표) |
 | P2 | Smart Handle 안내 미구현 | 메시지 → mock → bench → HIL 순서 구현 |
 
-## 14. 권장 통합 순서
+## 15. 권장 통합 순서
 
 1. 현재 토픽과 TF를 rosbag/읽기 전용 명령으로 확인한다.
 2. localization 의존성을 설치하고 확정된 `/wheel/odom + /imu/base_link → EKF → /odom` 계약을 깨끗한 환경에서 재검증한다.
-3. Nav2 명령을 `/cmd_vel_req`로 연결한다.
+3. Nav2 `/cmd_vel_req` remap의 일반·composition 모드와 실기 종단 동작을 검증한다.
 4. motor가 `/cmd_vel_safe`만 받는 현재 계약을 build/runtime에서 검증한다.
-5. `emergency_stop_node` 중앙 래치와 관리자 앱 단일 reset을 구현한다.
-6. 물리·음성·앱 E-stop을 바퀴를 띄운 상태에서 종단 검증한다.
-7. voice 운영 stub과 TTS 계약을 정리한다.
-8. 앱 Mission 상태와 목적지 데이터 계약을 통합한다.
-9. Turn Guide 순수 로직과 mock driver를 구현한다.
-10. 서보·LED MCU bench test를 수행한다.
-11. 전체 HIL 뒤 제한 구역 저속 주행을 수행한다.
+5. `vica_safety`의 중앙 래치와 reset 오케스트레이션을 package build/test한다.
+6. 물리·음성·앱 E-stop과 유지보수 `/safety_reset`을 바퀴를 띄운 상태에서 종단 검증한다.
+7. Host nvblox plugin과 Docker slice를 local costmap에 연결해 Goal을 검증한다.
+8. 통합 음성 launch와 `/vica/tts_request` 실제 재생을 검증한다.
+9. 앱 Mission 상태와 목적지 데이터 계약을 runtime에서 검증한다.
+10. Turn Guide 순수 로직과 mock driver를 구현한다.
+11. 서보·LED MCU bench test를 수행한다.
+12. 전체 HIL 뒤 제한 구역 저속 주행을 수행한다.
 
-## 15. 공식 참고자료
+## 16. 공식 참고자료
 
 전체 공식 URL 목록과 버전 주의사항은 별도 유지 문서인 [`official_reference_urls.md`](official_reference_urls.md)를 기준으로 한다.
 

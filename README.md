@@ -10,8 +10,8 @@ VICA는 Jetson Orin NX와 ROS 2 Humble 기반의 실내 안내 AMR 프로젝트�
 | --- | --- | --- |
 | [VICA-team-workspace](https://github.com/VICA-smarthandle/VICA-team-workspace) | 지침, 아키텍처, 시나리오, 공식 URL, manifest | 안정 `main`, 개발 `dev` |
 | [vica_ros2_ws](https://github.com/VICA-smarthandle/vica_ros2_ws) | ROS 2, Nav2, SLAM, EKF, Safety, motor | 안정 `main`, 개발 `dev` |
-| [vica-voice-llm](https://github.com/VICA-smarthandle/vica-voice-llm) | STT, TTS, 긴급어 감지, LLM | 현재 `main` |
-| [VICA_Supervisor](https://github.com/myw411/VICA_Supervisor) | Flutter 관리자 앱과 rosbridge client | 현재 `main` |
+| [vica-voice-llm](https://github.com/VICA-smarthandle/vica-voice-llm) | STT, TTS, 긴급어 감지, LLM | 안정 `main`, 개발 `dev` |
+| [VICA_Supervisor](https://github.com/myw411/VICA_Supervisor) | Flutter 관리자 앱과 rosbridge client | 안정 `main`, 개발 `dev` |
 
 기본 branch 역할은 단순하게 유지한다.
 
@@ -23,7 +23,8 @@ main  팀 검토와 필요한 실기 검증을 통과한 안정·배포 기준
 - 일반 작업은 `dev`에서 commit하고 push한다.
 - `main`에는 직접 push하지 않고 `dev → main` Pull Request로 반영한다.
 - 공유 branch에서 force push와 history 재작성을 금지한다.
-- LLM과 앱에 `dev`를 도입할 때는 branch를 먼저 만든 뒤 `workspace.repos`를 갱신한다.
+- 현재 작업공간의 세 제품 저장소와 `workspace.repos`는 모두 `dev`에서 통합한다.
+  release manifest는 검증된 tag 또는 commit SHA로 별도 고정한다.
 
 ## 2. 최초 설치
 
@@ -152,6 +153,7 @@ VICA-smarthandle/
 ├── workspace.repos
 ├── guideline/
 ├── devlog/
+├── docs/
 ├── source_file/
 ├── vica_ros2_ws/
 ├── vica-voice-llm/
@@ -167,6 +169,7 @@ VICA-smarthandle/
 | `workspace.repos` | 세 제품 저장소 URL과 현재 기준 branch manifest |
 | `guideline/` | 시나리오, 아키텍처, BT·파일 구조와 공식 URL |
 | `devlog/` | 중요한 결정, 장애 원인과 실기 검증 기록 |
+| `docs/` | 운영·설계 참고 문서. 실기 기동 절차는 `docs/vica_robot_bringup_manual.md` |
 | `source_file/` | 로컬 하드웨어 매뉴얼·도면 원본, Git 제외 |
 | `vica_ros2_ws/` | 주행, Safety, SLAM, Nav2, motor와 공용 ROS 인터페이스 |
 | `vica-voice-llm/` | 음성 입출력, 긴급어 감지와 목적지 후보 생성 |
@@ -179,6 +182,7 @@ VICA-smarthandle/
 | `vica_scenario.md` | 앱 기능과 사용자·관리자 동작 시나리오 |
 | `vica_architecture.md` | ROS 계약, Safety, TF와 저장소 경계 |
 | `bt와 visual hierarchy of your folders and files.md` | Nav2 BT, 패키지, 폴더와 파일 구조 |
+| `vica_system_health_monitoring_draft.md` | 상태 감시·자동 복구 목표안 |
 | `official_reference_urls.md` | ROS 2 Humble, Nav2, NVIDIA와 Isaac ROS 공식 문서 |
 
 ### 5.2 `vica_ros2_ws/`
@@ -190,14 +194,17 @@ vica_ros2_ws/
 ├── ekf_config/                      # 호환용, 정본은 vica_localization
 └── src/
     ├── vica_interfaces/             # 공용 ROS message 정본
+    ├── vica_destination_manager/    # 지도별 목적지 YAML 정본
     ├── vica_mission_manager/        # 목적지 검증, Nav2 Goal, Mission 상태
     ├── vica_nav2/                   # 저장 지도 Nav2 launch와 parameter
+    ├── vica_nvblox_bringup/         # Docker D455·nvblox 실행 설정
     ├── vica_cartographer/           # Cartographer 2D SLAM
     ├── vica_localization/           # wheel+IMU EKF와 표준 /odom
     ├── vica_description/            # URDF, mesh와 robot_state_publisher
     ├── vica_sensor_adapters/        # IMU와 VSLAM adapter
     ├── encoder_feedback/            # MDROBOT encoder → /wheel/odom
-    └── mdrobot_can_control/         # Safety Supervisor, E-stop, CAN motor
+    ├── vica_safety/                 # E-stop 중앙 래치, Safety, reset
+    └── mdrobot_can_control/         # /cmd_vel_safe → CAN motor
 ```
 
 ### 5.3 앱과 LLM
@@ -248,11 +255,11 @@ Odometry 계약:
 - EKF 설정 정본은 `vica_ros2_ws/src/vica_localization/config/ekf.yaml`이다.
 - D455는 별도 Docker/Isaac ROS 환경에서 실행한다.
 
-현재 Nav2 `/cmd_vel → /cmd_vel_req`, 중앙 E-stop 래치·관리자 reset과 C5+D455 실기 융합은
+현재 Nav2 `/cmd_vel_nav → /cmd_vel_req`, 중앙 E-stop 래치·관리자 reset과 C5+D455 실기 융합은
 종단 검증 완료 상태가 아니다.
 
-2D LiDAR는 YDLIDAR G2를 수리 보내 임시로 RPLIDAR를 `/scan` 공급원으로 사용한다(2026-07-22
-기준). Nav2 costmap과 Cartographer는 공급 라이다와 무관하게 `/scan`을 입력으로 쓰므로 토픽
+2D LiDAR는 YDLIDAR G2를 수리 보내 임시로 RPLIDAR를 `/scan` 공급원으로 사용한다(2026-07-26
+문서 검토 기준). Nav2 costmap과 Cartographer는 공급 라이다와 무관하게 `/scan`을 입력으로 쓰므로 토픽
 계약은 유지되지만, RPLIDAR 운용 동안 `laser_frame` 장착 위치와 라이다 드라이버 launch를
 실측에 맞춰 확인한다. YDLIDAR G2 복귀 시 원복한다.
 
