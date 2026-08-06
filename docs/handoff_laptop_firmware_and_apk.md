@@ -35,7 +35,7 @@ uname -m          # x86_64 여야 한다. aarch64면 이 문서의 대상 기기
 | 작업 | 저장소 | 브랜치 |
 | --- | --- | --- |
 | A. 펌웨어 | `vica_ros2_ws` (`VICA-smarthandle/vica_ros2_ws`) | `tune/handle-guidance-2026-08-02` |
-| B. APK | `VICA_Supervisor` (`myw411/VICA_Supervisor`) | `chore/android-gradle-cleanup` |
+| B. APK | `VICA_Supervisor` (`VICA-smarthandle/VICA_Supervisor`) | `chore/android-gradle-cleanup` |
 
 **공통 규칙** (`AGENTS.md`·`GOVERNANCE.md`):
 
@@ -229,7 +229,7 @@ flutter doctor                              # Android toolchain ✓ 확인
 ### B-3. 빌드
 
 ```bash
-git clone https://github.com/myw411/VICA_Supervisor.git
+git clone https://github.com/VICA-smarthandle/VICA_Supervisor.git
 cd VICA_Supervisor
 git checkout chore/android-gradle-cleanup
 flutter pub get
