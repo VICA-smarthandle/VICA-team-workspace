@@ -18,7 +18,7 @@ RoundRobin "RecoveryActions"
 
 `Spin` / `Wait` / `BackUp` 노드 수는 **0개**로 확인했다. 파일 상단이 뺀 이유를 적고 있다.
 
-```text
+```tex
 <BackUp/>   핸들 뒤에 사람이 따라온다
 <Spin/>     253 밴드에서 회전하면 후방 꼭짓점이 반경 0.675 m를 쓴다
 <Wait/>     실패를 시간으로 덮는다. 종전 복구 시간의 79 %가 이것이었다
