@@ -11,7 +11,7 @@ VICA는 Jetson Orin NX와 ROS 2 Humble 기반의 실내 안내 AMR 프로젝트�
 | [VICA-team-workspace](https://github.com/VICA-smarthandle/VICA-team-workspace) | 지침, 아키텍처, 시나리오, 공식 URL, manifest | 안정 `main`, 개발 `dev` |
 | [vica_ros2_ws](https://github.com/VICA-smarthandle/vica_ros2_ws) | ROS 2, Nav2, SLAM, EKF, Safety, motor | 안정 `main`, 개발 `dev` |
 | [vica-voice-llm](https://github.com/VICA-smarthandle/vica-voice-llm) | STT, TTS, 긴급어 감지, LLM | 안정 `main`, 개발 `dev` |
-| [VICA_Supervisor](https://github.com/myw411/VICA_Supervisor) | Flutter 관리자 앱과 rosbridge client | 안정 `main`, 개발 `dev` |
+| [VICA_Supervisor](https://github.com/VICA-smarthandle/VICA_Supervisor) | Flutter 관리자 앱과 rosbridge client | 안정 `main`, 개발 `dev` |
 
 기본 branch 역할은 단순하게 유지한다.
 
