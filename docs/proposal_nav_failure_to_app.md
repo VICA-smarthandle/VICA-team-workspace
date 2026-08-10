@@ -76,7 +76,7 @@ this.robotStatusTopic = '/robot_status',
 
 ### 1.4 중계 노드가 내용을 읽지 않는다
 
-`robot_health_monitor_node.py:244`
+`robot_health_monitor_node.py:257`
 
 ```python
 def handle_robot_state(self, _msg: RobotState) -> None:
