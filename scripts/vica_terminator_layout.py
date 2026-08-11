@@ -140,12 +140,13 @@ def build_terms(map_id: str) -> dict[str, Term]:
                 "[위험] 아래 상태 출력에 state UP이 보이면 실행하지 말 것.",
                 "드라이버에 전원이 들어간 뒤 CAN이 OFF되면 동력이 차단되고,",
                 "물리적으로 전원을 재투입해야 복구된다.",
-                "bitrate는 50000이다. 500000이 아니다.",
+                "bitrate는 500000이다 (2026-08-11 드라이버를 500 kbps로 바꿨다).",
+                "옛 문서의 50000으로 되돌리면 ERROR-PASSIVE로 통신이 끊긴다.",
                 "기동 순서는 드라이버 전원 → can1 up → ⑤ motor 다.",
             ),
             command=(
                 "sudo ip link set can1 down 2>/dev/null || true;"
-                " sudo ip link set can1 type can bitrate 50000"
+                " sudo ip link set can1 type can bitrate 500000"
                 " berr-reporting on restart-ms 100;"
                 " sudo ip link set can1 up; ip -details link show can1"
             ),

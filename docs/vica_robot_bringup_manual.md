@@ -341,12 +341,26 @@ motor node와 `encoder_feedback`은 `can1`을 자동으로 UP하거나 bitrate�
 
 ```bash
 sudo ip link set can1 down 2>/dev/null || true
-sudo ip link set can1 type can bitrate 50000 berr-reporting on restart-ms 100
+sudo ip link set can1 type can bitrate 500000 berr-reporting on restart-ms 100
 sudo ip link set can1 up
 ip -details link show can1
 ```
 
-bitrate 50 kbps는 MDROBOT 드라이버 설정값이다. 매뉴얼과 실측 근거 없이 바꾸지 않는다.
+bitrate는 **MDROBOT 드라이버에 설정된 값과 반드시 같아야 한다.** 근거 없이 바꾸지 않는다.
+
+> **2026-08-11: 50000 → 500000 (50 k → 500 kbps).** 드라이버 쪽 설정을 500 kbps로
+> 올렸기 때문에 젯슨도 맞춘 것이다. **이전 기록에 나오는 50000은 그 시점의 정답이었고
+> 지금은 아니다.**
+>
+> `devlog/2026-07-31-health-monitor-implementation.md:1349`에 *"bitrate를 500000으로
+> 잘못 친 기록"*이 남아 있는데, 그때는 드라이버가 50 k였으므로 실수였다. 이번은 드라이버를
+> 함께 바꾼 의도된 변경이다. **둘을 혼동해 50000으로 되돌리지 말 것.**
+>
+> 불일치하면 이렇게 나타난다 — 링크는 UP인데 송신만 실패해 에러가 쌓인다.
+> ```text
+> can <BERR-REPORTING> state ERROR-PASSIVE (berr-counter tx 128 rx 0)
+> ```
+> 아무도 ACK를 주지 않아 tx 카운터만 오른다. 이 증상이 보이면 양쪽 bitrate부터 맞춘다.
 
 **가운데 `type can bitrate ...` 줄을 빼지 않는다.** 2026-08-01 실측이다. 살아 있던
 `can1`을 2초 내렸다 `ip link set can1 up`만 하면 이렇게 된다.
