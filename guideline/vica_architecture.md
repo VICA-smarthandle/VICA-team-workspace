@@ -520,9 +520,14 @@ Cartographer와 Nav2 launch는 `vica_localization` bringup을 포함하며 표�
 
 정본 EKF 설정은 `vica_ros2_ws/src/vica_localization/config/ekf.yaml`이다. 기존 활성 설정
 형식과 주석 처리된 VSLAM 대안 블록을 유지한 채 `odom0`만 `/wheel/odom`으로 정합화했다.
-WS 루트 `ekf_config/`는 호환 목적으로 남아 있지만 정본이 아니므로 새 변경은
-`vica_localization` 설정을 기준으로 한다. 로컬의 미추적 `src/ekf_config/` 사본은 팀
-배포 범위에 포함하지 않는다.
+
+**호환용 사본은 2026-08-06에 삭제했다**(`b1e88f5`). WS 루트 `ekf_config/ekf.yaml`은 어떤
+launch도 읽지 않으면서 `sensor_timeout 0.1`을 품고 있었다. 정본은 `/wheel/odom` 실효 주기가
+9.45 Hz(105.8 ms)라 매 주기 timeout을 넘기던 문제를 고쳐 0.2로 올린 값이고,
+`print_diagnostics` 항목도 없어 기본 true로 남아 실기에서 앱에 "주행 불가 · 위치추정 오류"로
+뜨던 거짓 ERROR도 함께 되살아났다. 누가 `ekf_params_file:=`로 그 경로를 넘기면 조용히 두
+버그로 돌아가므로 지웠다. **EKF 설정 정본은 하나뿐이다.** 로컬의 미추적 `src/ekf_config/`
+사본은 팀 배포 범위에 포함하지 않는다.
 
 2026-07-22 기준으로 관련 4개 패키지 빌드, EKF 계약 테스트 2건, EKF 노드 기동,
 실제 로드 파라미터와 `/odom` 단일 publisher 생성까지 로컬 검증했다. 다만 개발 PC의

@@ -16,18 +16,50 @@
 
 ## 2. 현재 BT 구성 요약
 
-### 2.1 저장소에 사용자 정의 BT XML은 없다
+### 2.1 단일 목적지는 사용자 정의 BT XML을 쓴다
 
-현재 `vica_ros2_ws/src/vica_nav2`에는 사용자 정의 Behavior Tree XML이 없다. `nav2_params.yaml`의 `default_nav_to_pose_bt_xml`과 `default_nav_through_poses_bt_xml`도 주석 상태이므로, `nav2_bt_navigator`가 설치된 Nav2의 기본 BT를 선택한다.
+`vica_ros2_ws/src/vica_nav2/behavior_trees/`에 트리가 둘 있고, launch가
+`vica_navigate_to_pose_no_backup.xml`을 `default_nav_to_pose_bt_xml`로 넣는다
+(`nav2_params.yaml`의 값은 `SET_BY_VICA_NAV2_LAUNCH` 자리표시자다 — RewrittenYaml이 이미
+존재하는 키만 치환하므로 키가 있어야 하고, 실제 경로는 launch가 설치된 share 디렉터리로
+덮어쓴다). **이 launch를 거치지 않고 yaml만 직접 쓰면 bt_navigator가 파일을 못 찾아
+실패한다.** 조용히 기본 트리로 돌아가지 않는다.
 
-- 단일 목적지: `navigate_to_pose_w_replanning_and_recovery.xml`
-- 다중 경유지: `navigate_through_poses_w_replanning_and_recovery.xml`
+- 단일 목적지: **`vica_navigate_to_pose_no_backup.xml`** (사용자 정의)
+- 다중 경유지: `navigate_through_poses_w_replanning_and_recovery.xml` (Nav2 기본)
+
+기본 트리에서 `<BackUp/>` 한 줄을 지운 것이다. **실주행에서 핸들 뒤에 사람이 따라오는데**
+2026-07-30 Hybrid 주행에서 BackUp이 실제로 0.30 m 후진을 실행했다. planner를 DUBIN으로
+바꿔도 막히지 않는다 — BackUp은 planner를 거치지 않고 behavior_server가 직접 발행한다.
+`behavior_plugins`에서 `backup`만 빼는 방법도 쓸 수 없다. `BtActionNode::createActionClient`가
+액션 서버를 못 찾으면 예외를 던져 BT 생성이 실패하고 주행 전체가 죽는다.
+
+복구는 `RoundRobin`이 넷을 순환한다(재시도 6회).
+
+```
+ClearingActions → SpinLeft(+17.2°) → SpinRight(−17.2°) → Wait(5 s)
+```
+
+Spin을 좌/우로 나눈 이유는 nav2 Spin이 BT가 준 부호대로만 돌아 한쪽만 두면 편향되기
+때문이고, 기본 90°를 17.2°로 줄인 이유는 253 밴드에서 Spin이 회전을 시작해 핸들이 의자에
+부딪혔기 때문이다. `test_recovery_bt_contract.py`가 후진 가능 노드의 재진입과 Spin 각도
+상한(0.35 rad)을 계약으로 잠근다.
+
+또 하나의 트리 `vica_navigate_to_pose_clearing_only.xml`은 **측정용**이다. 로봇을 움직이는
+복구를 전부 걷어내 순수 주행 실력을 재려고 만들었고, 그 측정에서 "복구 없이는 장애물 앞에서
+못 빠져나온다"가 확인돼 2026-08-01에 제품 트리로 되돌렸다. 되돌릴 자리로 저장소에 남긴다.
 - VICA Mission Manager가 현재 호출하는 액션: `NavigateToPose`
-- 경로 계획기: `SmacPlanner2D` (2026-07-28 NavFn에서 교체)
+- 경로 계획기: **`SmacPlannerLattice`** (`nav2_params.yaml:1276`. NavFn → SmacPlanner2D →
+  Hybrid를 거쳐 Lattice로 왔다. Hybrid 블록도 파일에 남아 있으나 활성이 아니다)
 - 경로 추종기: DWB
-- 복구 동작: 비용지도 초기화, 회전, 대기, 후진 등 Nav2 기본 복구 노드
+- 복구 동작: **비용지도 초기화 · 좌회전 · 우회전 · 대기.** 후진은 없다(위 2.1)
 
-기본 BT의 복구 분기 실측값(2026-07-29):
+### 2.1.1 왜 기본 트리를 버렸나 — 2026-07-29 실측
+
+아래는 **Nav2 기본 트리를 쓰던 시절의 기록**이다. 커스텀 트리를 만든 근거이므로 남긴다.
+현재 설정이 아니다.
+
+기본 BT의 복구 분기(2026-07-29):
 
 ```text
 RecoveryNode "NavigateRecovery"  number_of_retries=6
@@ -40,7 +72,7 @@ RecoveryNode "NavigateRecovery"  number_of_retries=6
     ④ BackUp  backup_dist=0.30 m, speed=0.05 m/s
 ```
 
-이 복구 분기는 현재 VICA에서 사실상 작동하지 않는다. 실측 기준은 다음과 같다.
+이 복구 분기는 VICA에서 사실상 작동하지 않았다. 실측 기준은 다음과 같다.
 
 - `Spin`은 0.10 s, `BackUp`은 0.0005 s 만에 `Collision Ahead`로 중단된다. 두 동작 모두
   padded footprint를 미리 스윕해 검사하는데, 차체가 0.905 m로 길어 통로에서 거의 항상
@@ -53,7 +85,12 @@ RecoveryNode "NavigateRecovery"  number_of_retries=6
   반대로 트인 곳에서는 검사를 통과해 실제로 사람 쪽으로 후진하므로, 안전상 `BackUp`
   제거가 필요하다. `min_vel_x: 0.0`은 DWB만 막고 `behavior_server`에는 적용되지 않는다.
 
-아래 그림은 저장소 설정과 Nav2 기본 동작을 기준으로 단순화한 개념도다. 실제 BT 노드와 포트의 최종 기준은 실행 중 선택된 Nav2 설치본의 XML이다.
+**그 제거를 실행한 것이 2.1의 커스텀 트리다.** 2026-07-30 Hybrid 주행에서 BackUp이 실제로
+0.30 m 후진한 것이 마지막 근거였다. Spin은 1.57 rad(90°)에서 0.30 rad(17.2°)로 줄이고
+좌/우로 나눴다.
+
+아래 그림은 **현재 활성 트리**(`vica_navigate_to_pose_no_backup.xml`)의 개념도다. 실제 BT
+노드와 포트의 최종 기준은 그 XML 파일이다.
 
 ```mermaid
 flowchart TD
@@ -72,9 +109,9 @@ flowchart TD
     J --> L[Recovery Round Robin]
     K --> L
     L --> M[Costmap Clear]
-    L --> N[Spin]
-    L --> O[Wait]
-    L --> P[BackUp]
+    L --> N["SpinLeft +17.2°"]
+    L --> O["SpinRight −17.2°"]
+    L --> P[Wait 5 s]
     M --> E
     N --> E
     O --> E
@@ -239,12 +276,12 @@ VICA-smarthandle/
 │   ├── bags/
 │   ├── scripts/
 │   ├── docs/
-│   ├── ekf_config/                             # 호환용 설정, 정본은 vica_localization
 │   └── src/
 │       ├── vica_interfaces/
 │       ├── vica_destination_manager/
 │       ├── vica_mission_manager/
 │       ├── vica_nav2/
+│       ├── vica_system_monitor/             # 상태 감시, /robot/health·/robot/events
 │       ├── vica_nvblox_bringup/                # Docker D455·nvblox launch/config
 │       ├── mdrobot_can_control/
 │       ├── vica_safety/
@@ -371,15 +408,14 @@ vica_ros2_ws/src/
 │   │   └── vica_slam_bringup.launch.py         # localization 포함 SLAM 통합 launch
 │   └── config/vica_2d.lua
 │
-└── ekf_config/                                 # 호환용 설정 사본, 정본은 vica_localization
-    ├── ekf.yaml
-    └── command.txt
 ```
 
-현재 `colcon list`에서 확인되는 VICA 패키지는 12개다. `vica.repos`는
+현재 `colcon list`에서 확인되는 VICA 패키지는 14개다. `vica.repos`는
 `rplidar_ros`, `ydlidar_ros2_driver`, `realsense-ros`를 선언하지만 현재 소스 트리에는
 import되어 있지 않으므로 위 패키지 수에 포함하지 않는다. `vica_localization`이
-`robot_localization` EKF 설정과 bringup의 정본이며 `ekf_config`는 호환용 사본이다.
+`robot_localization` EKF 설정과 bringup의 정본이다. WS 루트의 호환용 사본
+`ekf_config/`는 2026-08-06에 삭제했다(`b1e88f5`) — 참조하는 launch가 없는데 옛 버그값
+`sensor_timeout 0.1`을 품고 있어 `ekf_params_file:=`로 넘기면 조용히 되살아났다.
 
 ## 7. 음성 저장소 핵심 파일
 
@@ -497,10 +533,11 @@ flowchart TD
 ```text
 vica_ros2_ws/src/
 ├── vica_interfaces/msg/
-│   ├── TurnGuide.msg                           # [TARGET] 방향·단계·거리·유효시간
-│   └── SmartHandleState.msg                    # [TARGET] 접촉·서보/LED/햅틱 fault
+│   ├── TurnGuide.msg                           # 방향·단계·거리·유효시간
+│   └── SmartHandleState.msg                    # 접촉·서보/LED/햅틱 fault
+│                                               # (상향 통신이 없어 접촉 필드는 미사용)
 │
-└── vica_user_guidance/                         # [TARGET]
+└── vica_user_guidance/                         # 구현 완료 (dev)
     ├── package.xml
     ├── setup.py
     ├── launch/user_guidance.launch.py
