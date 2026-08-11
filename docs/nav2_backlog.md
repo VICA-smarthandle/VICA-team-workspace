@@ -16,7 +16,7 @@
 
 | ID | 항목 | 왜 실기가 필요한가 | 상태 |
 | --- | --- | --- | --- |
-| **B1** | AMCL 튜닝 4건 | 위치추정 거동이 직접 바뀐다 | [ ] |
+| **B1** | AMCL 튜닝 4건 | 위치추정 거동이 직접 바뀐다 | [~] 구현·실기 대기 |
 | **B2** | `pose_bootstrap` 를 dev 로 | 기동 절차가 바뀐다. 임계값 6종 전부 미검증 | [ ] |
 | **B3** | MPPI 전환 + `inflation ≥ 0.651` | controller 교체는 주행 전체가 바뀐다 | [ ] |
 | **B5** | `collision_monitor` 도입 | 새 노드가 `/cmd_vel` 경로에 들어간다 | [ ] |
@@ -58,11 +58,20 @@
 
 내가 어디 있는지 틀리면 나머지 설정이 전부 헛돈다.
 
+> **2026-08-11 구현됨.** `tune/amcl-b1` (`2c9eb47`) 에 네 값이 다 들어갔고 계약 시험
+> `test_amcl_contract.py` 가 실측 수치를 상한으로 잠갔다. **실기 판정 전**이며 절차는
+> `devlog/2026-08-11-amcl-b1-실기검증.md` 에 있다.
+
 ### 선행 조건
 
 **`laser_max_range` 를 먼저 정해야 한다.** `/scan` 의 실제 `range_max` 가 아직
 `[미확인]` 이다(`devlog/2026-07-31-home-return-implementation.md:268`).
 이것이 틀리면 나머지 임계값 튜닝이 통째로 무의미해진다.
+
+> **판단 교정(2026-08-07).** `handoff_nav2_collision_monitor_and_amcl.md` §12.5 가
+> humble `amcl_node.cpp` 를 확인한 결과 `laser_max_range` 는 `min()` 으로 clamp 되므로
+> 100.0 은 사실상 "드라이버 값 그대로"다. **선행 조건이 아니다** — 실측은 여전히 필요하지만
+> 나머지 셋을 여기에 묶어 대기시킬 이유는 없다.
 
 ```bash
 ros2 topic echo /scan --field range_max --once

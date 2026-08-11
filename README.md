@@ -191,7 +191,6 @@ VICA-smarthandle/
 vica_ros2_ws/
 ├── README.md
 ├── vica.repos                       # 외부 ROS 저장소 버전
-├── ekf_config/                      # 호환용, 정본은 vica_localization
 └── src/
     ├── vica_interfaces/             # 공용 ROS message 정본
     ├── vica_destination_manager/    # 지도별 목적지 YAML 정본
@@ -202,10 +201,16 @@ vica_ros2_ws/
     ├── vica_localization/           # wheel+IMU EKF와 표준 /odom
     ├── vica_description/            # URDF, mesh와 robot_state_publisher
     ├── vica_sensor_adapters/        # IMU와 VSLAM adapter
+    ├── vica_system_monitor/         # 상태 감시, /robot/health·/robot/events
+    ├── vica_user_guidance/          # 스마트핸들 서보·LED·햅틱, 회전 안내
     ├── encoder_feedback/            # MDROBOT encoder → /wheel/odom
     ├── vica_safety/                 # E-stop 중앙 래치, Safety, reset
     └── mdrobot_can_control/         # /cmd_vel_safe → CAN motor
 ```
+
+WS 루트의 `ekf_config/`는 2026-08-06에 삭제됐다. 참조하는 launch가 없는데
+`sensor_timeout 0.1`(정본은 0.2)을 품고 있어, 누가 `ekf_params_file:=`로 그 경로를
+넘기면 조용히 옛 버그로 돌아갔다. **EKF 설정 정본은 하나뿐이다.**
 
 ### 5.3 앱과 LLM
 

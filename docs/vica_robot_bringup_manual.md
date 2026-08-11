@@ -487,7 +487,17 @@ ros2 launch vica_nav2 nav2_map_test.launch.py \
 
 encoder를 이미 별도로 띄웠다면 `start_encoder:=false`로 넘긴다.
 
-### ⑨-1 위치 자동 초기화 (Host) `[미검증]`
+### ⑨-1 위치 자동 초기화 (Host) `[미검증]` `[dev 에 없음]`
+
+> **이 단계는 `dev`에서 실행되지 않는다.** `pose_bootstrap`은 `feat/home-return`
+> 브랜치에만 있고 `dev`에는 파일 자체가 없다. `dev`로 운용하면
+> `Package 'vica_localization' … pose_bootstrap.launch.py not found`에서 막히므로
+> **이 절을 건너뛰고 ⑩에서 `require_localization_ready:=false`를 넘긴다.**
+> 초기 pose는 종전대로 RViz "2D Pose Estimate"로 지정한다.
+>
+> dev 로 가져오는 것은 `docs/nav2_backlog.md`의 **NAV2-B2** 항목이며, 같은 문서가
+> **NAV2-B1(AMCL 튜닝)을 먼저 하라**고 적어 둔 이유도 함께 본다 — 갱신 문턱을 낮추면
+> 이 노드가 부르는 `/request_nomotion_update`의 필요성과 횟수가 달라진다.
 
 ```bash
 ros2 launch vica_localization pose_bootstrap.launch.py map_id:=vica_map_0630

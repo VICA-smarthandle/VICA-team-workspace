@@ -32,9 +32,19 @@ Collision Monitor(B5)를 **`/cmd_vel_req` 생산자 자리에 전방 전용 2단
 
 ---
 
-## 1. 반드시 먼저 확인할 것 — 저장소 동기화 함정
+## 1. 저장소 동기화 함정 — **2026-08-11 해소됨**
 
-이 세션에서 가장 먼저 발견한 문제다. **이걸 모르고 시작하면 존재하지 않는 파일을 고치게 된다.**
+> **이 절은 과거 기록이다.** 2026-08-11 확인 결과 루트·`vica_ros2_ws`·`vica-voice-llm`·
+> `VICA_Supervisor` 네 저장소가 모두 `dev`이고 작업 트리가 깨끗하다. 아래 표의 뒤처짐은
+> 더 이상 사실이 아니다.
+>
+> **이 문서의 줄 번호는 그대로 유효하다.** `origin/dev`가 `21ca187` → `4706a32`로 갔지만
+> 그 사이 변경은 `vica_system_monitor` 4파일뿐이라 `nav2_params.yaml`은 1485줄 그대로다
+> (footprint `:487`·`:921`, inflation `:907`·`:1076`, lattice `:1276` 전부 확인).
+> §13 미결 **#6(저장소 pull 후 재확인)은 닫혔다.**
+
+같은 함정이 다시 생길 수 있으므로 당시 기록을 남긴다.
+**이걸 모르고 시작하면 존재하지 않는 파일을 고치게 된다.**
 
 2026-08-07 기준 실측:
 
@@ -155,7 +165,7 @@ behavior_server (Spin·Wait·DriveOnHeading) ──cmd_vel───────�
 | **배선 함정 회피** | `backlog §5` · `devlog/2026-07-29.md:213-216` 이 경고한 *"velocity_smoother 뒤에만 끼우면 복구 동작이 감시를 통째로 우회한다"* 를 구조적으로 차단 |
 | **계약 무변경** | Safety 는 `/cmd_vel_req` 를 계속 구독. **Safety·motor 코드 수정 0**. `CLAUDE.md` 의 "Nav2 최종 요청은 `/cmd_vel_req`" 가 오히려 더 정확해짐 |
 | **사망이 정지로** | Monitor 가 죽으면 `/cmd_vel_req` 단절 → Safety 가 `cmd_timeout_sec` 0.5 s 뒤 stale → 출력 0. 새 단일 실패점이 **fail-safe 방향으로** 무너짐 |
-| **정책 준수** | `official_reference_urls.md:183` *"Safety Supervisor 를 대체하지 않고 그 앞에 놓는다"* |
+| **정책 준수** | `official_reference_urls.md:200` *"Nav2 Collision Monitor만으로 하드웨어 E-stop이나 VICA safety supervisor를 대체하지 않는다"*. 체인 순서는 같은 파일 `:193` |
 
 **부작용**: `/cmd_vel_req` 발행자가 6 → 1 로 바뀐다. `CLAUDE.md` 실측 기록 갱신 필요.
 
@@ -505,7 +515,8 @@ depth:
 
 **③ 여전히 지상 38 cm 한 평면만 본다.** (§8)
 
-**④ 하드웨어 E-stop 을 대체하지 않는다.** `official_reference_urls.md:183`
+**④ 하드웨어 E-stop 을 대체하지 않는다.** `official_reference_urls.md:200` — *"Nav2 Collision
+Monitor만으로 하드웨어 E-stop이나 VICA safety supervisor를 대체하지 않는다."*
 
 ---
 
@@ -679,7 +690,7 @@ ros2 topic echo /scan --field range_max --once
 | 3 | RViz 화면의 사각형 2개 정체 | 사용자가 보낸 스크린샷의 회색/주황 사각형이 직접 그려본 polygon 후보인지 local costmap 경계인지 미확인 |
 | 4 | `source_timeout 0.3` 적정성 | §9 한계 ① 때문에 어느 값도 fail-safe 가 아니다. LiDAR health 와 함께 결정 |
 | 5 | AMCL `max_beams` 실제 CPU 여유 | Jetson 에서 nvblox·STT 와 경합(§8.7). 실기에서만 판정 가능 |
-| 6 | 저장소 pull 후 재확인 | 이 문서의 모든 줄 번호는 `origin/dev`(2026-08-07) 기준 |
+| ~~6~~ | ~~저장소 pull 후 재확인~~ | **닫힘(2026-08-11).** 줄 번호 전부 유효함을 확인했다(§1) |
 
 ---
 
@@ -699,7 +710,7 @@ ros2 topic echo /scan --field range_max --once
 | 핸들 스윕·회전 필요폭 | `devlog/2026-08-02-주행테스트.md:223,382` |
 | 유령 장애물 | `devlog/2026-07-30-nvblox-ghost-obstacle.md` |
 | LiDAR timeout → STOP `[TARGET]` | `guideline/vica_system_health_monitoring_draft.md` §8.6.1, §9.1 |
-| Collision Monitor 는 Safety 를 대체하지 않는다 | `guideline/official_reference_urls.md:183` |
+| Collision Monitor 는 Safety 를 대체하지 않는다 | `guideline/official_reference_urls.md:200` (체인 순서는 `:193`) |
 | 정지거리·감속 실측 | `vica_ros2_ws` `origin/dev` `nav2_params.yaml:1451-1476` |
 | footprint 육각형 | 〃 `:487`, `:921` |
 | 최협 통로 반폭 0.35 | 〃 `:271`, `:296` |
@@ -726,3 +737,4 @@ ros2 topic echo /scan --field range_max --once
 - 저장소 checkout / pull / commit **없음** (이 문서 커밋 제외)
 - 실기 시험 **없음** — 모든 수치는 기존 devlog 실측과 소스 확인에서 인용
 - `vica_ros2_ws` 는 `app-UI/status-test` 체크아웃 상태 그대로 두었다
+  (2026-08-11 현재는 `dev`로 정리됨 — §1)
