@@ -9,13 +9,25 @@
 # 동작하지 않아 이름을 칠 수 없다. 2026-08-01 실기에서 막혔다.
 # 서비스가 받는 것은 destination_id(UUID)라 이름은 표시용일 뿐이다.
 
+VICA_ROS_WS=${VICA_ROS_WS:-$HOME/VICA-smarthandle/vica_ros2_ws}
+
 source /opt/ros/humble/setup.bash
-source $HOME/VICA-smarthandle/vica_ros2_ws/install/setup.bash
+source $VICA_ROS_WS/install/setup.bash
 export ROS_DOMAIN_ID=7
 export ROS_LOCALHOST_ONLY=0
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
-MAP=${VICA_MAP_ID:-vica_map_0630}
+# 현재 지도. nav2·mission·app·initpose 와 같은 규칙으로 정한다 —
+# 환경변수 > maps/CURRENT_MAP 순서다. 옛 fallback 은 vica_map_0630 고정이라
+# 터미네이터 밖에서 단독 실행하면 조용히 옛 지도의 목적지를 보냈다.
+MAP=$VICA_MAP_ID
+if [ -z "$MAP" ]; then
+  MAP=$(head -1 "$VICA_ROS_WS/maps/CURRENT_MAP" 2>/dev/null | tr -d '[:space:]')
+fi
+if [ -z "$MAP" ]; then
+  echo "[중단] 현재 지도를 알 수 없다. export VICA_MAP_ID=<이름> 뒤 다시 실행한다."
+  exit 1
+fi
 DEST=$HOME/vica_data/destinations/$MAP/destinations.yaml
 
 if [ "${1:-}" = "cancel" ]; then

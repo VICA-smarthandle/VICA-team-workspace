@@ -11,13 +11,38 @@
 #
 # AMCL은 대략만 맞으면 라이다로 스스로 보정한다. 정확할 필요는 없다.
 
+VICA_ROS_WS=${VICA_ROS_WS:-$HOME/VICA-smarthandle/vica_ros2_ws}
+
 source /opt/ros/humble/setup.bash
-source $HOME/VICA-smarthandle/vica_ros2_ws/install/setup.bash
+source $VICA_ROS_WS/install/setup.bash
 export ROS_DOMAIN_ID=7
 export ROS_LOCALHOST_ONLY=0
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 
-DEST=$HOME/vica_data/destinations/vica_map_0630/destinations.yaml
+# 장소 목록은 지도마다 다르다. 현재 지도는 nav2·mission·app 과 같은 규칙으로
+# 정한다 — 환경변수 > maps/CURRENT_MAP 순서다.
+#
+# 2026-08-13 이전에는 여기에 vica_map_0630 이 박혀 있었다. 그래서 0810 지도로
+# 주행하면서 0630 의 좌표를 초기 위치로 찍고 있었다. 장소 이름이 양쪽에 다 있으면
+# 오류도 나지 않는다 — 로봇이 엉뚱한 곳에 있다고 믿은 채 출발할 뿐이다.
+if [ -z "$VICA_MAP_ID" ]; then
+  VICA_MAP_ID=$(head -1 "$VICA_ROS_WS/maps/CURRENT_MAP" 2>/dev/null | tr -d '[:space:]')
+fi
+if [ -z "$VICA_MAP_ID" ]; then
+  echo "[중단] 현재 지도를 알 수 없다."
+  echo "       $VICA_ROS_WS/maps/CURRENT_MAP 이 없고 VICA_MAP_ID 도 비어 있다."
+  echo "       쓸 수 있는 지도는 여기서 본다:  ls $VICA_ROS_WS/maps/*.yaml"
+  echo "       정한 뒤 다시 실행한다:          export VICA_MAP_ID=<지도이름>"
+  exit 1
+fi
+
+DEST=$HOME/vica_data/destinations/$VICA_MAP_ID/destinations.yaml
+
+echo "  지도: $VICA_MAP_ID"
+if [ ! -f "$DEST" ]; then
+  echo "  [경고] 이 지도의 목적지 catalog 가 없다: $DEST"
+  echo "         장소 이름은 못 쓴다. 좌표로 넣는다: $0 <x> <y> <yaw도>"
+fi
 
 if [ "${1:-}" = "--list" ] || [ -z "${1:-}" ]; then
   echo "저장된 장소:"
