@@ -673,7 +673,7 @@ PROFILES: dict[str, Profile] = {
 RC_TEMPLATE = """\
 # 자동 생성 파일 — scripts/vica_terminator_layout.py 가 다시 만든다. 직접 고치지 말 것.
 [ -f "$HOME/.bashrc" ] && source "$HOME/.bashrc"
-{ros_block}{overlay_block}{cd_block}
+{helper_block}{ros_block}{overlay_block}{cd_block}
 printf '\\n\\033[1;36m=== %s ===\\033[0m\\n' {title_q}
 {note_block}printf '\\n'
 {map_block}{precheck_block}{run_block}
@@ -723,16 +723,27 @@ fi
 export ROS_DOMAIN_ID=7
 export ROS_LOCALHOST_ONLY=0
 export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
+"""
 
+# 아래 도우미들은 ros 여부와 무관하게 모든 칸에 넣는다.
+#
+# 2026-08-13 이전에는 이 정의가 ROS_BLOCK 안에 있었다. 그래서 `ros=False` 인 칸
+# (nvblox·gui)은 vica_guard 를 부르는데 정의는 없는 rc 를 받았고, "command not
+# found" 로 127이 나면서 GUARD_BLOCK 의 `|| return` 이 rc 를 거기서 끊었다.
+# 뒤에 오는 history -s 까지 못 가므로 위 화살표를 눌러도 명령이 나오지 않았다.
+# 중복 방지가 사라진 것보다 이쪽이 먼저 눈에 띄었을 뿐, 두 가지가 함께 깨져 있었다.
+#
+# 조건부로 넣으면 같은 결함이 되살아난다. 함수 정의뿐이라 비용이 없으므로 항상 넣는다.
+HELPER_BLOCK = """\
 # 패키지 존재 확인. AMENT_PREFIX_PATH만 훑으므로 ros2 CLI도 DDS도 건드리지 않는다.
-vica_have_pkg() {{
+vica_have_pkg() {
   local _pkg="$1" _prefix
   local IFS=:
   for _prefix in $AMENT_PREFIX_PATH; do
     [ -f "$_prefix/share/ament_index/resource_index/packages/$_pkg" ] && return 0
   done
   return 1
-}}
+}
 
 # 같은 노드가 이미 떠 있는지 본다. 인자는 `pgrep -x`가 쓰는 comm 이름들이다.
 #
@@ -744,7 +755,7 @@ vica_have_pkg() {{
 #
 # ros2 CLI를 쓰지 않는다. DDS graph는 죽은 노드를 한동안 캐시해서 오탐이 나고,
 # 조회 자체가 느리다. 프로세스 테이블이 지금 이 순간의 사실이다.
-vica_running() {{
+vica_running() {
   local _name _pid _self=$$
   for _name in "$@"; do
     for _pid in $(pgrep -x "$_name" 2>/dev/null); do
@@ -753,10 +764,10 @@ vica_running() {{
     done
   done
   return 1
-}}
+}
 
 # 실행 직전 중복을 막는다. 이미 떠 있으면 명령을 내보내지 않는다.
-vica_guard() {{
+vica_guard() {
   if vica_running "$@"; then
     printf '\\033[0;31m[중복]\\033[0m 이미 실행 중입니다:\\n'
     local _n _p
@@ -773,7 +784,7 @@ vica_guard() {{
     printf '\\033[0;33m[VICA_FORCE] 경고를 무시하고 진행합니다.\\033[0m\\n'
   fi
   return 0
-}}
+}
 """
 
 # 감시 패키지는 운영 빌드에 없을 수 있다. 없을 때만 overlay를 덧씌운다.
@@ -908,6 +919,7 @@ def render_rc(term: Term, ros_ws: Path, fallback_map_id: str) -> str:
         run_block = HOLD_BLOCK.format(command_q=shell_quote(term.command))
 
     return RC_TEMPLATE.format(
+        helper_block=HELPER_BLOCK,
         ros_block=ros_block,
         overlay_block=overlay_block,
         cd_block=cd_block,
@@ -919,6 +931,26 @@ def render_rc(term: Term, ros_ws: Path, fallback_map_id: str) -> str:
     )
 
 
+def check_rc(key: str, term: Term, text: str) -> None:
+    """만들어 낸 rc 가 스스로를 끊지 않는지 본다.
+
+    rc 가 중간에서 멈추면 터미널은 멀쩡히 열린다. 머리말은 이미 찍혔고 프롬프트도
+    뜨므로 눈으로는 정상과 구별되지 않는다 — 위 화살표를 눌러 봐야 비어 있는 것을
+    안다. 그래서 사람 눈이 아니라 여기서 잡는다.
+    """
+    if "\nvica_guard " in text and "vica_guard() {" not in text:
+        raise SystemExit(
+            f"[오류] 칸 '{key}' 의 rc 가 vica_guard 를 부르는데 정의가 없다.\n"
+            "       실행하면 command not found 로 127 이 나고 rc 가 거기서 끊긴다."
+        )
+
+    if term.mode == HOLD and "history -s " not in text:
+        raise SystemExit(
+            f"[오류] 칸 '{key}' 는 대기(HOLD) 인데 rc 에 history -s 가 없다.\n"
+            "       위 화살표를 눌러도 명령이 나오지 않는다."
+        )
+
+
 def write_rc_files(
     terms: dict[str, Term], used: set[str], ros_ws: Path, fallback_map_id: str
 ) -> dict[str, Path]:
@@ -928,9 +960,9 @@ def write_rc_files(
 
     for key in sorted(used):
         path = RC_DIR / f"{rc_name(key)}.rc"
-        path.write_text(
-            render_rc(terms[key], ros_ws, fallback_map_id), encoding="utf-8"
-        )
+        text = render_rc(terms[key], ros_ws, fallback_map_id)
+        check_rc(key, terms[key], text)
+        path.write_text(text, encoding="utf-8")
         paths[key] = path
 
     return paths
