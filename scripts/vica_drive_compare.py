@@ -59,6 +59,11 @@ ROWS = [
     ('stop_count',        '정지 구간',              'down', '회'),
     ('stop_time_s',       '정지 시간 합',           'down', 's'),
     ('stop_max_s',        '최장 정지',              'down', 's'),
+    # 도착 판정과 다음 주행 사이에 로봇은 서 있다. 이용자에게는 "도착했는데
+    # 안 움직인다"로 느껴지고, 정지 시간 합에도 섞여 들어가 주행 정체처럼 보인다.
+    ('arrival_count',     '목적지 도착',            'info', '회'),
+    ('arrival_wait_mean', '도착 후 대기 평균',      'down', 's'),
+    ('arrival_wait_max',  '도착 후 대기 최대',      'down', 's'),
     ('scan_min_m',        '벽 최소 이격',           'up',   'm'),
     ('path_ratio',        '이동거리 ÷ 직선거리',    'down', '배'),
     ('missed_rate',       '제어주기 놓침',          'down', '회'),
@@ -236,6 +241,41 @@ def analyse_rosout(samples):
     return r
 
 
+def analyse_arrival_wait(rosout):
+    """목적지에 닿은 뒤 다음 주행이 시작될 때까지 로봇이 서 있는 시간.
+
+    Mission Manager 가 도착을 알리고 다음 goal 을 내는 사이의 공백이다.
+    주행이 막힌 것이 아니므로 정지 시간과 갈라서 봐야 한다 — 2026-08-13
+    회차에서 이것이 섞여 "정지 시간이 늘었다"로 보였다.
+
+    마지막 도착은 뒤에 시작이 없으므로 세지 않는다(기록 끝까지 대기한다).
+    """
+    marks = []
+    for t, m in rosout:
+        msg = m.msg
+        if 'Reached the goal' in msg or 'Goal succeeded' in msg:
+            marks.append((t, 'reach'))
+        elif 'Navigating to goal' in msg or 'Received a goal' in msg:
+            marks.append((t, 'start'))
+
+    waits, pending = [], None
+    for t, kind in marks:
+        if kind == 'reach':
+            if pending is None:
+                pending = t
+        elif pending is not None:
+            gap = t - pending
+            if gap > 0.5:          # 도착·재시작이 같은 순간이면 대기가 아니다
+                waits.append(gap)
+            pending = None
+
+    if not waits:
+        return {'arrival_count': len(waits)}
+    return {'arrival_count': len(waits),
+            'arrival_wait_mean': statistics.mean(waits),
+            'arrival_wait_max': max(waits)}
+
+
 def analyse_status(samples):
     """action status. 4=SUCCEEDED, 5=ABORTED, 6=CANCELED."""
     seen = {}
@@ -293,6 +333,7 @@ def measure(path, trim_tail=0.0):
         r.update(analyse_scan(bag['/scan']))
     if bag['/rosout'] is not None:
         r.update(analyse_rosout(bag['/rosout']))
+        r.update(analyse_arrival_wait(bag['/rosout']))
     if bag['/navigate_to_pose/_action/status'] is not None:
         r.update(analyse_status(bag['/navigate_to_pose/_action/status']))
     r.update(analyse_cpu(name, trim_tail))
