@@ -35,8 +35,9 @@ echo "=== 사전 점검 ==="
 S=$(ip -br link show can1 2>/dev/null | awk '{print $2}')
 [ "$S" = "UP" ] && ok "can1 UP" || bad "can1 이 $S 다. 매뉴얼 ①절 세 줄로 복구한다"
 
+# 2026-08-11: 드라이버를 500 kbps로 바꿨다. 50000 이던 값이다.
 B=$(ip -details link show can1 2>/dev/null | grep -oE 'bitrate [0-9]+' | head -1)
-[ "$B" = "bitrate 50000" ] && ok "$B" || bad "bitrate 가 '$B' 다. 50000 이어야 한다"
+[ "$B" = "bitrate 500000" ] && ok "$B" || bad "bitrate 가 '$B' 다. 500000 이어야 한다"
 
 # --- 노드 -----------------------------------------------------------------
 NODES=$(ros2 node list 2>/dev/null)
