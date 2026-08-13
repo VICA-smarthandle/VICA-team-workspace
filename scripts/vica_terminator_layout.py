@@ -5,11 +5,12 @@
 한 번 실행하면 프로파일 수만큼 Terminator 레이아웃이 생기고, 그 뒤로는
 `terminator -l <레이아웃>`만 치면 된다.
 
-    python3 scripts/vica_terminator_layout.py     # 네 프로파일 모두 생성
+    python3 scripts/vica_terminator_layout.py     # 다섯 프로파일 모두 생성
     terminator -l vica                            # 주행 전체
     terminator -l vica_drive                      # 음성 제외 주행
     terminator -l vica_app                        # 앱·안전·감시 검증
     terminator -l vica_sensor                     # 센서·인지만 (바퀴 없음)
+    terminator -l vica_map                        # 지도 작성 (Nav2 없음)
 
 각 터미널은 전용 rc 파일로 bash를 띄운다. rc가 하는 일:
 
@@ -58,6 +59,9 @@ DEFAULT_ROS_WS = WORKSPACE / "vica_ros2_ws"
 # "로봇 스택은 vica_ros2_ws/install, 감시 노드는 별도 worktree"를 실측 구성으로 기록했다.
 MONITOR_OVERLAYS = ("$HOME/wt-dev", "$HOME/wt-monitor")
 
+# `maps/CURRENT_MAP`이 없을 때만 쓰는 fallback. 평소 지도는 실행 시점에
+# CURRENT_MAP이 정하므로 이 값은 거의 쓰이지 않는다. 생성 시점에 이름을 굳혀
+# 명령에 박아 넣던 방식이 칸마다 지도가 갈리던 원인이라 그렇게 바꿨다.
 DEFAULT_MAP_ID = "vica_map_0630"
 
 RC_DIR = HOME / ".config" / "vica-terminator"
@@ -74,6 +78,7 @@ OBSOLETE_LAYOUTS = (
     "vica_drive",
     "vica_app",
     "vica_sensor",
+    "vica_map",
     "vicavoice",
 )
 
@@ -92,6 +97,7 @@ class Term:
         precheck: str = "",
         monitor_overlay: bool = False,
         guard: tuple[str, ...] = (),
+        uses_map: bool = False,
     ) -> None:
         self.title = title
         self.note = note
@@ -108,16 +114,19 @@ class Term:
         # 중복 실행을 막을 프로세스 이름들(`pgrep -x` 기준, 15자 comm).
         # 비어 있으면 검사하지 않는다 — shell 처럼 여러 개 띄워도 되는 칸이다.
         self.guard = guard
+        # 명령이 $VICA_MAP_ID / $VICA_MAP_YAML 을 쓰는 칸. 어느 지도인지 화면에
+        # 찍고 지도·목적지 파일이 실제로 있는지 확인한다.
+        self.uses_map = uses_map
 
 
-def build_terms(map_id: str) -> dict[str, Term]:
-    """지도 id를 반영해 터미널 정의를 만든다.
+def build_terms() -> dict[str, Term]:
+    """터미널 정의를 만든다.
 
-    명령 안의 `$VICA_ROS_WS`는 rc가 정한 워크스페이스를 실행 시점에 펼친다.
-    생성 시점 경로를 굳혀버리면 워크스페이스를 옮겼을 때 조용히 옛 지도를 읽는다.
+    명령 안의 `$VICA_ROS_WS`·`$VICA_MAP_ID`·`$VICA_MAP_YAML`은 rc가 정한 값을
+    실행 시점에 펼친다. 생성 시점의 경로나 지도 이름을 굳혀버리면 워크스페이스를
+    옮기거나 지도를 새로 그렸을 때 조용히 옛것을 읽는다. 실제로 2026-08-13 이전에는
+    지도 이름이 칸마다 박혀 있어 nav2 와 initpose 가 서로 다른 지도를 보고 있었다.
     """
-    map_yaml = f"$VICA_ROS_WS/maps/{map_id}.yaml"
-
     return {
         # ------------------------------------------------------------------
         # ⓪~④ 준비·센서·안전. 바퀴가 돌지 않는다.
@@ -204,7 +213,7 @@ def build_terms(map_id: str) -> dict[str, Term]:
             ),
             command="ros2 launch mdrobot_can_control motor_bringup.launch.py",
             mode=HOLD,
-                    guard=("mdrobot_can_keyb", "keyboard_knob",),
+                    guard=("mdrobot_can_ke", "keyboard_knob",),
 ),
         "d455": Term(
             title="⑥ d455",
@@ -255,23 +264,70 @@ def build_terms(map_id: str) -> dict[str, Term]:
                 "TF가 이중 발행되어 위치추정이 깨진다.",
                 "기동 뒤 RViz에서 2D Pose Estimate로 초기 위치를 찍는다. 안 찍으면",
                 "global_costmap이 activating [13]에서 멈춘다. 고장이 아니다.",
+                "",
+                "지도는 위에 찍힌 '현재 지도'다. 바꾸려면 터미네이터를 다 닫고",
+                "VICA_MAP_ID 를 export 한 뒤 새로 띄운다. 이 칸에서만 고치면 mission·",
+                "app·initpose 는 옛 지도를 계속 보고, Nav2 는 아무 불평 없이 돈다.",
             ),
-            command=f"ros2 launch vica_nav2 nav2_map_test.launch.py map:={map_yaml}",
+            command=(
+                "ros2 launch vica_nav2 nav2_map_test.launch.py map:=$VICA_MAP_YAML"
+            ),
             mode=HOLD,
+            uses_map=True,
                     guard=("bt_navigator", "planner_server", "controller_serv", "amcl",),
+),
+        # slam 과 nav2 는 상호 배타다. 둘 다 wheel_ekf.launch.py 를 include 하므로
+        # 함께 띄우면 /odom 과 odom→base_footprint 가 이중 발행되고, AMCL 과
+        # Cartographer 가 둘 다 map→odom 을 내보내 위치가 통째로 깨진다.
+        # 그래서 vica_map 레이아웃에는 nav2 칸을 아예 넣지 않는다.
+        "slam": Term(
+            title="slam",
+            note=(
+                "[금지] ⑨ nav2 와 함께 띄우지 말 것. 두 launch 가 모두 wheel_ekf 를",
+                "include 해 /odom 과 odom→base_footprint TF 가 이중 발행되고,",
+                "AMCL 과 Cartographer 가 둘 다 map→odom 을 내보내 위치가 깨진다.",
+                "",
+                "선행 조건은 ⑤ motor 다. encoder_feedback 은 request_position_feedback",
+                "이 False 라 피드백을 스스로 요청하지 않는다. motor node 가 없으면",
+                "/wheel/odom 이 아예 나오지 않는다.",
+                "",
+                "odom_topic:=/wheel/odom 은 엔코더 원본을 그대로 쓰겠다는 뜻이다.",
+                "기본값 /odom(EKF 출력)은 30 Hz 로 나오는데 바퀴 측정은 9.45 Hz 뿐이라",
+                "셋 중 둘은 등속도 모델이 지어낸 값이다. Cartographer 는 이 토픽 하나로",
+                "다음 스캔 위치를 예측하고 거기서 ±0.1 m 만 찾으므로, 빠르게 돌면",
+                "예측이 그 창을 벗어나 지도가 번진다(2026-08-12 매핑 실패). [미검증]",
+                "",
+                "EKF 는 이 launch 가 함께 띄운다. 끄지 말 것 —",
+                "odom→base_footprint TF 의 유일한 발행자다.",
+                "",
+                "RViz Fixed Frame 을 map 으로 두고 지도가 자라는 것을 보며 끌고 다닌다.",
+                "회전은 천천히. 빠른 제자리 회전이 번짐을 가장 크게 만든다.",
+            ),
+            command=(
+                "ros2 launch vica_cartographer vica_slam_bringup.launch.py"
+                " odom_topic:=/wheel/odom"
+            ),
+            mode=HOLD,
+                    guard=("cartographer_no", "cartographer_oc", "ekf_node",
+                           "encoder_feedbac",),
 ),
         "mission": Term(
             title="⑩ mission",
             note=(
                 "[바퀴가 돕니다] 일반 운영 Goal의 단일 권한자다.",
-                f"⑫ 음성과 map_id가 다르면 목적지 catalog가 갈린다. 둘 다 {map_id} 로 맞춘다.",
+                "목적지 catalog 는 지도마다 다르다 —",
+                "  ~/vica_data/destinations/<map_id>/destinations.yaml",
+                "그래서 map_id 가 갈리면 ⑨ nav2·⑫ 음성과 목적지가 따로 논다.",
+                "이 칸을 포함해 전부 $VICA_MAP_ID 하나를 읽으므로 갈릴 일이 없다.",
+                "앱이 다른 map_id 로 요청하면 거부하고 current/requested 를 남긴다.",
             ),
             command=(
                 "ros2 launch vica_mission_manager mission_manager.launch.py"
-                f" map_id:={map_id} map_yaml:={map_yaml}"
+                " map_id:=$VICA_MAP_ID map_yaml:=$VICA_MAP_YAML"
             ),
             mode=HOLD,
-                    guard=("vica_mission_man",),
+            uses_map=True,
+                    guard=("vica_mission_ma",),
 ),
         # ------------------------------------------------------------------
         # ⑪~⑬ 앱·감시·음성.
@@ -284,10 +340,11 @@ def build_terms(map_id: str) -> dict[str, Term]:
             ),
             command=(
                 f"ros2 launch {SUPERVISOR}/ros2/supervisor_bringup.launch.py"
-                f" map_yaml:={map_yaml}"
+                " map_yaml:=$VICA_MAP_YAML"
             ),
             mode=HOLD,
-                    guard=("rosbridge_websoc",),
+            uses_map=True,
+                    guard=("rosbridge_webso",),
 ),
         "monitor": Term(
             title="⑪-1 monitor",
@@ -328,9 +385,10 @@ def build_terms(map_id: str) -> dict[str, Term]:
                 "시작 로그에 '목적지 catalog가 없어' WARN이 뜨면 map_id가 틀린 것이다.",
                 "그 상태에서도 노드는 정상으로 보이지만 모든 목적지가 gate에서 막힌다.",
             ),
-            command=f"ros2 launch launch/vica_voice.launch.py map_id:={map_id}",
+            command="ros2 launch launch/vica_voice.launch.py map_id:=$VICA_MAP_ID",
             mode=HOLD,
             workdir=VOICE,
+            uses_map=True,
                     guard=("vica_llm_node", "vica_tts_node",),
 ),
         "stt": Term(
@@ -357,9 +415,12 @@ def build_terms(map_id: str) -> dict[str, Term]:
                 "목적지 이름이 한글인데 xfreerdp(RDP)에서 한영 전환이 안 되어",
                 "번호로 고르게 만들었다. 서비스가 받는 것은 UUID라 이름은 표시용이다.",
                 "초기 위치를 먼저 잡아야 승인된다 — 왼쪽 initpose 칸을 본다.",
+                "목적지 목록은 현재 지도의 catalog 에서 읽고, 요청에도 그 map_id 를",
+                "실어 보낸다. Mission Manager 쪽 map_id 와 다르면 거부된다.",
             ),
             command="bash $VICA_ROOT/scripts/vica_goto.sh",
             mode=HOLD,
+            uses_map=True,
         ),
         "initpose": Term(
             title="initpose",
@@ -371,9 +432,13 @@ def build_terms(map_id: str) -> dict[str, Term]:
                 "RViz가 원격에서 CPU 170 %를 쓰며 느려지면 클릭-드래그가 완성되지 않는다.",
                 "2026-08-01에 실제로 그래서 못 찍었다. 이 칸이 그 우회로다.",
                 "안 넣으면 map->odom TF가 없어 Nav2가 경로를 내지 못한다.",
+                "",
+                "장소 이름은 현재 지도의 목적지 catalog 에서 읽는다. 지도가 바뀌면",
+                "목록도 바뀐다. catalog 가 없는 지도면 목록이 비므로 좌표로 넣는다.",
             ),
             command="bash $VICA_ROOT/scripts/vica_set_initial_pose.sh",
             mode=HOLD,
+            uses_map=True,
         ),
         "record": Term(
             title="record",
@@ -386,6 +451,29 @@ def build_terms(map_id: str) -> dict[str, Term]:
                 "Ctrl+C로 멈춘다. 파일은 ~/vica_data/bags/<이름>/ 에 남는다.",
             ),
             command="bash $VICA_ROOT/scripts/vica_drive_record.sh run$(date +%H%M)",
+            mode=HOLD,
+        ),
+        "save": Term(
+            title="save",
+            note=(
+                "지도 저장 + 앱용 png 변환 + 검증을 한 번에 한다.",
+                "이름을 바꾸려면 위 화살표로 꺼내 마지막 인자만 고친다.",
+                "",
+                "같은 이름이 이미 있으면 거부한다 — 어렵게 그린 지도를 덮어쓰지 않는다.",
+                "SLAM 이 안 떠 있으면 저장을 시작하지 않는다. map_saver_cli 가 /map 없이도",
+                "timeout 까지 조용히 기다린 뒤 빈 손으로 끝나기 때문이다.",
+                "",
+                "png 를 함께 만드는 이유는 앱이 maps/*.png 만 훑기 때문이다.",
+                "pgm 만 있으면 지도를 떠도 앱 목록에 나타나지 않는다.",
+                "성공하면 maps/CURRENT_MAP 이 갱신된다.",
+                "",
+                "제한시간은 120 초다(map_saver_cli 기본값 2 초). 노드가 십수 개 뜬",
+                "상태에서는 /map 구독을 맺는 데만 2 초를 넘겨, 지도가 멀쩡히 발행",
+                "중인데도 'Failed to spin map subscription' 으로 끝난다.",
+                "정상일 때는 첫 장이 오는 즉시 끝나므로 길게 잡아도 느려지지 않는다.",
+                "더 필요하면 앞에 붙인다:  VICA_MAP_SAVE_TIMEOUT=300",
+            ),
+            command="bash $VICA_ROOT/scripts/vica_map_save.sh vica_map_$(date +%m%d)",
             mode=HOLD,
         ),
         "handle": Term(
@@ -421,6 +509,10 @@ def build_terms(map_id: str) -> dict[str, Term]:
                 "E-stop reset(유지보수). 모든 위험 원인을 직접 해제 확인한 뒤에만 실행한다.",
                 "거부되면 로그의 active sources 를 읽는다 — 그것이 아직 남은 원인이다.",
                 "정본은 로그인한 관리자가 앱에서 하는 단일 reset이다. 이 칸은 그 대체가 아니다.",
+                "",
+                "선행 조건은 ④ safety 와 ⑤ motor 다. /motor/can_ok 가 래치 원인의 하나라",
+                "motor node 가 없으면 motor_can_stale 이 남아 reset 이 거부된다.",
+                "고장이 아니라 설계다 — 동력 상태를 모르는 채로는 풀지 않는다.",
             ),
             command='ros2 service call /safety_reset std_srvs/srv/Trigger "{}"',
             mode=HOLD,
@@ -545,6 +637,36 @@ PROFILES: dict[str, Profile] = {
             ["imu", "nvblox", "monitor", "shell"],
         ],
     ),
+    "map": Profile(
+        layout="vica_map",
+        title="VICA 지도 작성 (Cartographer)",
+        summary="지도를 그려서 저장하고 앱 형식까지 바꾼다 — Nav2 없음",
+        basis=(
+            "Cartographer 는 /scan 과 오도메트리 토픽 하나만 본다"
+            " (vica_2d.lua: use_odometry = true, use_imu_data = false)."
+            " nvblox·Mission·앱·음성은 지도 작성에 관여하지 않아 뺐다."
+            " nav2 는 뺀 것이 아니라 넣으면 안 되는 것이다 — SLAM 과 EKF·map→odom TF"
+            " 가 충돌한다."
+            " motor 는 뺄 수 없다. 엔코더 피드백을 요청하는 쪽이 motor node 라서,"
+            " 없으면 /wheel/odom 이 나오지 않는다."
+            " d455·imu 는 뺐다. slam 칸이 odom_topic:=/wheel/odom 으로 뜨므로 IMU 가"
+            " 지도에 닿는 유일한 통로(EKF)가 끊긴다 — /imu/base_link 의 구독자는"
+            " ekf.yaml 하나뿐이고 Cartographer 는 use_imu_data = false 다."
+            " EKF 자체는 slam 칸의 launch 가 함께 띄운다. odom→base_footprint TF 의"
+            " 유일한 발행자라 끄면 map→odom 이 나오지 않는다."
+            " rviz 는 주행 프로파일과 달리 여기서는 필수다 — 지도가 자라는 것을 보지"
+            " 않고는 어디를 더 돌아야 하는지 알 수 없다."
+            " reset 은 teleop 앞에 둔다. 중앙 래치는 기동 직후 latched 로 시작하고"
+            " /motor/can_ok 가 원인의 하나라, safety·motor 가 다 뜬 뒤에야 풀린다."
+            " 풀지 않으면 teleop 을 눌러도 /cmd_vel_safe 가 나가지 않아 로봇을"
+            " 끌고 다닐 수 없다 — 지도 작성 자체가 시작되지 않는다."
+        ),
+        columns=[
+            ["power", "can", "display", "lidar", "safety"],
+            ["motor", "reset", "slam", "teleop"],
+            ["rviz", "save", "check", "shell"],
+        ],
+    ),
 }
 
 
@@ -554,7 +676,7 @@ RC_TEMPLATE = """\
 {ros_block}{overlay_block}{cd_block}
 printf '\\n\\033[1;36m=== %s ===\\033[0m\\n' {title_q}
 {note_block}printf '\\n'
-{precheck_block}{run_block}
+{map_block}{precheck_block}{run_block}
 """
 
 ROS_BLOCK = """\
@@ -564,6 +686,33 @@ export VICA_ROS_WS="${{VICA_ROS_WS:-{ros_ws}}}"
 # 저장소 루트. scripts/ 아래 도구(goto·initpose·record)가 여기를 기준으로 돈다.
 # 워크스페이스의 부모라 별도 인자 없이 유도한다.
 export VICA_ROOT="${{VICA_ROOT:-$(dirname "$VICA_ROS_WS")}}"
+
+# 현재 지도를 한 곳에서 정한다. nav2·mission·app·initpose 가 모두 이 값을 읽으므로
+# 칸마다 다른 지도를 보는 일이 생기지 않는다. 2026-08-13 이전에는 생성 시점의
+# 이름이 칸마다 박혀 있어서, nav2·mission 은 0810 을 보고 initpose 는 0630 을 보는
+# 상태로 주행했다. 어느 쪽도 오류를 내지 않아 눈에 띄지 않았다.
+#
+# 우선순위는 환경변수 > maps/CURRENT_MAP > 아래 fallback 이다.
+#
+# CURRENT_MAP 은 "가장 새 지도"가 아니라 "마지막으로 끝까지 성공한 저장"이다.
+# vica_map_save.sh 가 마지막 단계까지 통과했을 때만 쓴다 — png 변환이나 검증에서
+# 멈추면 옛 이름이 그대로 남는다. 반쪽짜리 지도가 현재 지도가 되지 않게 하려는
+# 것이라 의도한 동작이다.
+if [ -n "$VICA_MAP_ID" ]; then
+  VICA_MAP_SRC="환경변수"
+else
+  # 손으로 고쳤을 때를 대비해 첫 줄만 읽고 공백을 턴다.
+  VICA_MAP_ID=$(head -1 "$VICA_ROS_WS/maps/CURRENT_MAP" 2>/dev/null | tr -d '[:space:]')
+  VICA_MAP_SRC="maps/CURRENT_MAP"
+fi
+if [ -z "$VICA_MAP_ID" ]; then
+  VICA_MAP_ID={map_id}
+  VICA_MAP_SRC="fallback — CURRENT_MAP 이 없다"
+fi
+export VICA_MAP_ID VICA_MAP_SRC
+export VICA_MAP_YAML="$VICA_ROS_WS/maps/$VICA_MAP_ID.yaml"
+export VICA_DEST_YAML="$HOME/vica_data/destinations/$VICA_MAP_ID/destinations.yaml"
+
 source /opt/ros/humble/setup.bash
 if [ -f "$VICA_ROS_WS/install/setup.bash" ]; then
   source "$VICA_ROS_WS/install/setup.bash"
@@ -659,6 +808,25 @@ printf '\\033[0;34m현재 상태\\033[0m\\n'
 printf '\\n'
 """
 
+# 지도를 쓰는 칸에서만 어느 지도인지 눈에 보이게 한다. 칸끼리 어긋나는 사고는
+# 전부 "조용히 어긋남"이라, 사람이 명령을 누르기 전에 소리를 내게 하는 것이
+# 가장 값싼 방어다. 목적지 카탈로그를 함께 보는 이유는 지도만 있고 카탈로그가
+# 없는 상태가 실제로 흔하기 때문이다 — 방금 그린 지도가 늘 그렇다.
+MAP_BLOCK = """\
+printf '\\033[0;36m현재 지도\\033[0m %s  \\033[0;37m(%s)\\033[0m\\n' \\
+  "$VICA_MAP_ID" "$VICA_MAP_SRC"
+if [ ! -f "$VICA_MAP_YAML" ]; then
+  printf '\\033[0;31m[경고]\\033[0m 지도 파일이 없다: %s\\n' "$VICA_MAP_YAML"
+  printf '        maps/ 를 확인하고 VICA_MAP_ID 를 다시 정한다.\\n'
+fi
+if [ ! -f "$VICA_DEST_YAML" ]; then
+  printf '\\033[0;31m[경고]\\033[0m 목적지 카탈로그가 없다: %s\\n' "$VICA_DEST_YAML"
+  printf '        Mission Manager 는 정상으로 뜬 채 모든 목적지 요청을 막는다.\\n'
+  printf '        새로 그린 지도는 늘 이 상태다 — 목적지를 먼저 등록한다.\\n'
+fi
+printf '\\n'
+"""
+
 GUARD_BLOCK = """\
 vica_guard {names} || return 2>/dev/null || exit 0
 """
@@ -688,9 +856,15 @@ def rc_name(term_key: str) -> str:
     return f"t_{term_key}"
 
 
-def render_rc(term: Term, ros_ws: Path) -> str:
-    """터미널 한 칸의 rc 내용을 만든다."""
-    ros_block = ROS_BLOCK.format(ros_ws=ros_ws) if term.ros else ""
+def render_rc(term: Term, ros_ws: Path, fallback_map_id: str) -> str:
+    """터미널 한 칸의 rc 내용을 만든다.
+
+    `fallback_map_id`는 `maps/CURRENT_MAP`이 없을 때만 쓰인다. 생성 시점의
+    이름을 명령에 박지 않는다 — 그것이 칸마다 지도가 갈리던 원인이었다.
+    """
+    ros_block = (
+        ROS_BLOCK.format(ros_ws=ros_ws, map_id=fallback_map_id) if term.ros else ""
+    )
 
     if term.monitor_overlay:
         candidates = " ".join(f'"{path}"' for path in MONITOR_OVERLAYS)
@@ -739,19 +913,24 @@ def render_rc(term: Term, ros_ws: Path) -> str:
         cd_block=cd_block,
         title_q=shell_quote(term.title),
         note_block=note_block,
+        map_block=MAP_BLOCK if term.uses_map else "",
         precheck_block=precheck_block + guard_block,
         run_block=run_block,
     )
 
 
-def write_rc_files(terms: dict[str, Term], used: set[str], ros_ws: Path) -> dict[str, Path]:
+def write_rc_files(
+    terms: dict[str, Term], used: set[str], ros_ws: Path, fallback_map_id: str
+) -> dict[str, Path]:
     """선택된 프로파일이 쓰는 rc 파일만 만들고 경로를 돌려준다."""
     RC_DIR.mkdir(parents=True, exist_ok=True)
     paths: dict[str, Path] = {}
 
     for key in sorted(used):
         path = RC_DIR / f"{rc_name(key)}.rc"
-        path.write_text(render_rc(terms[key], ros_ws), encoding="utf-8")
+        path.write_text(
+            render_rc(terms[key], ros_ws, fallback_map_id), encoding="utf-8"
+        )
         paths[key] = path
 
     return paths
@@ -892,7 +1071,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--map-id",
         default=DEFAULT_MAP_ID,
-        help=f"지도 id. 기본 {DEFAULT_MAP_ID}. ⑨⑩⑫가 같은 값을 쓴다.",
+        help="maps/CURRENT_MAP 이 없을 때만 쓰는 fallback 지도 id."
+        f" 기본 {DEFAULT_MAP_ID}. 평소 지도는 실행 시점에 CURRENT_MAP 이 정하므로"
+        " 이 값을 바꿔도 대개 아무 영향이 없다. 지도를 바꾸려면 터미네이터를 띄우기"
+        " 전에 VICA_MAP_ID 를 export 한다.",
     )
     parser.add_argument(
         "--ros-ws",
@@ -924,7 +1106,7 @@ def print_profiles(terms: dict[str, Term]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    terms = build_terms(args.map_id)
+    terms = build_terms()
 
     # 정의만 검사한다. 오타 난 칸 이름은 config 를 쓰기 전에 잡는다.
     for key, profile in PROFILES.items():
@@ -936,6 +1118,22 @@ def main(argv: list[str] | None = None) -> int:
                         file=sys.stderr,
                     )
                     return 1
+
+    # guard 이름 길이. 리눅스 comm 은 15자에서 잘리므로(TASK_COMM_LEN 16, NUL 포함)
+    # 16자로 적은 이름은 `pgrep -x` 가 영원히 못 맞춘다. 검사가 통과하는 것처럼
+    # 보이면서 중복 실행 방지만 조용히 꺼진다 — 2026-08-12 에 motor·mission·app
+    # 세 칸이 실제로 그 상태였다. 눈으로는 안 보이므로 여기서 막는다.
+    for key, term in terms.items():
+        for name in term.guard:
+            if len(name) > 15:
+                print(
+                    f"[오류] 칸 '{key}' 의 guard 이름이 15자를 넘는다: '{name}'"
+                    f" ({len(name)}자).\n"
+                    "       리눅스 comm 은 15자에서 잘려 pgrep -x 가 못 맞춘다."
+                    " 실기에서 `ps -eo comm=` 로 잘린 이름을 확인해 적는다.",
+                    file=sys.stderr,
+                )
+                return 1
 
     if args.list:
         print_profiles(terms)
@@ -949,7 +1147,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[경고] 워크스페이스가 지금은 없다: {args.ros_ws}", file=sys.stderr)
 
     if args.dry_run:
-        print(f"지도 id: {args.map_id}")
+        print(f"fallback 지도 id: {args.map_id}")
         print(f"워크스페이스: {args.ros_ws}")
         print(f"rc 파일 {len(used)}개 예정: {RC_DIR}")
         for key in selected:
@@ -958,7 +1156,7 @@ def main(argv: list[str] | None = None) -> int:
         print("(dry-run: 아무것도 쓰지 않았다)")
         return 0
 
-    rc_paths = write_rc_files(terms, used, args.ros_ws)
+    rc_paths = write_rc_files(terms, used, args.ros_ws, args.map_id)
     print(f"rc 파일 {len(rc_paths)}개 생성: {RC_DIR}")
 
     if TERMINATOR_CONFIG.exists():
@@ -982,7 +1180,23 @@ def main(argv: list[str] | None = None) -> int:
 
     TERMINATOR_CONFIG.write_text(text, encoding="utf-8")
 
-    print(f"지도 id: {args.map_id}")
+    # 지도는 생성 시점이 아니라 실행 시점에 정해진다. 지금 무엇이 잡힐지 그대로
+    # 보여 준다 — 여기서 한 번 보고 나면 칸을 띄우고 놀랄 일이 없다.
+    current = args.ros_ws / "maps" / "CURRENT_MAP"
+    if current.is_file() and current.read_text(encoding="utf-8").split():
+        map_id = current.read_text(encoding="utf-8").split()[0]
+        print(f"현재 지도: {map_id}  (maps/CURRENT_MAP)")
+    else:
+        map_id = args.map_id
+        print(f"현재 지도: {map_id}  (fallback — CURRENT_MAP 이 없다)")
+    if not (args.ros_ws / "maps" / f"{map_id}.yaml").is_file():
+        print(f"  [경고] 지도 파일이 없다: maps/{map_id}.yaml", file=sys.stderr)
+    if not (HOME / "vica_data" / "destinations" / map_id / "destinations.yaml").is_file():
+        print(
+            f"  [경고] 목적지 catalog 가 없다: ~/vica_data/destinations/{map_id}/",
+            file=sys.stderr,
+        )
+    print("  바꾸려면 터미네이터를 모두 닫고 export VICA_MAP_ID=<이름> 뒤 다시 띄운다.")
     for key in selected:
         profile = PROFILES[key]
         auto = sum(
