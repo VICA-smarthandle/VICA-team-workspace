@@ -664,9 +664,17 @@ PROFILES: dict[str, Profile] = {
             " 가 충돌한다."
             " motor 는 뺄 수 없다. 엔코더 피드백을 요청하는 쪽이 motor node 라서,"
             " 없으면 /wheel/odom 이 나오지 않는다."
-            " d455·imu 는 뺐다. slam 칸이 odom_topic:=/wheel/odom 으로 뜨므로 IMU 가"
-            " 지도에 닿는 유일한 통로(EKF)가 끊긴다 — /imu/base_link 의 구독자는"
-            " ekf.yaml 하나뿐이고 Cartographer 는 use_imu_data = false 다."
+            " d455·imu 는 [2026-08-15 복구] 다시 넣었다. 뺐던 근거가 틀렸다 —"
+            " 'slam 칸이 odom_topic:=/wheel/odom 으로 뜨므로 IMU 가 지도에 닿는"
+            " 통로가 끊긴다'고 적었는데, 그 인자는 launch 하드코딩 때문에 줄곧"
+            " 무시되고 있었고 Cartographer 는 계속 EKF /odom 을 읽었다. 그리고"
+            " ekf.yaml 의 imu0_config 는 vyaw 를 true 로 융합한다 — IMU 는 /odom 을"
+            " 통해 지도에 그대로 닿는다. 8/12 매핑 회차들도 IMU 를 띄운 채였다."
+            " Cartographer 가 use_imu_data = false 인 것은 사실이지만 그건 '직접"
+            " 구독하지 않는다'는 뜻일 뿐 무관하다는 뜻이 아니다."
+            " ⑦ imu 를 띄운 뒤 20초 동안 로봇을 완전히 세워 둔다 — 그 칸에"
+            " 'Gyro bias calibrated' 가 떠야 유효한 회차다. 'calibration aborted'"
+            " 가 뜨면 그 칸을 내렸다 다시 띄운다(2026-08-12 12:56 회차가 그랬다)."
             " EKF 자체는 slam 칸의 launch 가 함께 띄운다. odom→base_footprint TF 의"
             " 유일한 발행자라 끄면 map→odom 이 나오지 않는다."
             " rviz 는 주행 프로파일과 달리 여기서는 필수다 — 지도가 자라는 것을 보지"
@@ -678,7 +686,7 @@ PROFILES: dict[str, Profile] = {
         ),
         columns=[
             ["power", "can", "display", "lidar", "safety"],
-            ["motor", "reset", "slam", "teleop"],
+            ["motor", "d455", "imu", "reset", "slam", "teleop"],
             ["rviz", "save", "check", "shell"],
         ],
     ),
