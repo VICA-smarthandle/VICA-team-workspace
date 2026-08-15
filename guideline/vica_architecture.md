@@ -229,6 +229,7 @@ uint8 transition        # RAISED=0, ESCALATED=1, REMINDER=2, CLEARED=3
 | `/vica/robot_state` | `RobotState` | Mission Manager | LLM node | 1 Hz 상태 입력, 연결됨 |
 | `/vica/tts_request` | `std_msgs/String` | STT, LLM, Mission Manager | TTS | 우선순위 큐 연결, 실제 음성 출력 `[미검증]` |
 | `/vica/tts_state` | `std_msgs/Bool` | TTS | 긴급어 감시 | 재생 중 자가 E-stop 오탐 억제 |
+| `/vica/listen_request` | `std_msgs/Bool` | LLM node, Mission Manager | 웨이크워드 노드 | 질문("~할까요?") 후 재청취 예약 — 웨이크워드 재호출 없이 답변 수신, 실기 `[미검증]` |
 | `/voice_emergency_stop` | `std_msgs/Bool` | emergency bridge | emergency_stop_node | 연결 가능 |
 | `/app_emergency_stop` | `std_msgs/Bool` | app_emergency_node | emergency_stop_node | 연결 가능 |
 | `/emergency_stop` | `std_msgs/Bool` | vica_safety/emergency_stop_node | Safety, Mission, app_emergency_node | 중앙 래치 코드·launch 구현, 실기 `[미검증]` |
