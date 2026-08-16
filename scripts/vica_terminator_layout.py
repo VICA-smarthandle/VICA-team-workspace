@@ -672,7 +672,7 @@ PROFILES: dict[str, Profile] = {
             " 통해 지도에 그대로 닿는다. 8/12 매핑 회차들도 IMU 를 띄운 채였다."
             " Cartographer 가 use_imu_data = false 인 것은 사실이지만 그건 '직접"
             " 구독하지 않는다'는 뜻일 뿐 무관하다는 뜻이 아니다."
-            " ⑦ imu 를 띄운 뒤 20초 동안 로봇을 완전히 세워 둔다 — 그 칸에"
+            " ⑦ imu 를 띄운 뒤 25초 동안 로봇을 완전히 세워 둔다 — 그 칸에"
             " 'Gyro bias calibrated' 가 떠야 유효한 회차다. 'calibration aborted'"
             " 가 뜨면 그 칸을 내렸다 다시 띄운다(2026-08-12 12:56 회차가 그랬다)."
             " EKF 자체는 slam 칸의 launch 가 함께 띄운다. odom→base_footprint TF 의"
