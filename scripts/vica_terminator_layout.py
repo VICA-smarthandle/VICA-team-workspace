@@ -651,18 +651,20 @@ PROFILES: dict[str, Profile] = {
     ),
     "drive": Profile(
         layout="vica_drive",
-        title="VICA bringup (drive, 음성 제외)",
-        summary="주행 전체에서 ⑫⑬ 음성만 뺀 구성",
+        title="VICA bringup (drive, 음성 포함)",
+        summary="주행 전체에서 ⑬ push-to-talk 만 뺀 구성 — ⑫ 음성 포함",
         basis=(
-            "매뉴얼 5절이 '⑫⑬은 앱·CLI만 쓸 때 생략 가능'이라고 적었고, 2026-08-01에도"
-            " 목적지 요청을 goto CLI로만 넣은 구간이 있다. GPU 여유도 그만큼 늘어난다."
+            "원래는 ⑫⑬ 음성을 뺀 구성이었으나(앱·CLI 전용, GPU 여유 확보),"
+            " 2026-08-18 실주행에서 음성→Nav2 종단이 완주된 뒤로는 음성이 주행의"
+            " 기본 입력이다 — 2026-08-19 사용자 요청으로 ⑫를 포함했다."
+            " ⑬ stt 는 push-to-talk 개발용이라 계속 뺀다."
         ),
         columns=[
             ["power", "can", "display", "lidar", "safety"],
             ["motor", "d455", "imu", "segnet", "nav2", "nvblox"],
             ["mission", "app", "gui", "monitor", "handle"],
             ["initpose", "goto", "record", "reset", "rviz"],
-            ["check", "teleop", "shell"],
+            ["llm", "check", "teleop", "shell"],
         ],
     ),
     "app": Profile(
