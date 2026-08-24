@@ -60,12 +60,6 @@ fi
 PGM="$MAPS/$NAME.pgm"
 PNG="$MAPS/$NAME.png"
 YAML="$MAPS/$NAME.yaml"
-# Cartographer 의 원본 상태. pgm 이 '흑백 도면'이라면 이쪽은 '지도를 만들 때 찍은
-# 스캔 전부와 그것들을 이어붙인 기록'이다. 지금 당장 쓰지는 않지만, 나중에
-# "아무 데나 놔도 자기 위치를 찾게" 하려면 이 파일이 반드시 있어야 한다
-# (Cartographer pure localization). 저장 비용이 0 인데 나중에 다시 만들려면
-# 사람이 로봇을 끌고 다닌 시간을 통째로 다시 써야 한다.
-PBSTREAM="$MAPS/$NAME.pbstream"
 
 echo "=== 지도 저장: $NAME ==="
 echo "    위치: $MAPS"
@@ -76,7 +70,7 @@ echo
 # ---------------------------------------------------------------------------
 echo "--- 1) 덮어쓰기 확인 ---"
 exists=""
-for f in "$PGM" "$PNG" "$YAML" "$PBSTREAM"; do
+for f in "$PGM" "$PNG" "$YAML"; do
   [ -e "$f" ] && exists="$exists  $f"$'\n'
 done
 if [ -n "$exists" ]; then
@@ -179,31 +173,6 @@ ok "png 생성 완료 — 앱이 읽는 것은 이 파일이다"
 echo
 
 # ---------------------------------------------------------------------------
-# 5-1. Cartographer 원본 상태(.pbstream)
-# ---------------------------------------------------------------------------
-#
-# 실패해도 die 하지 않는다. pgm·png·yaml 은 이미 저장됐고 그것만으로 주행은 된다.
-# 여기서 멈추면 멀쩡히 저장된 지도를 "실패"로 오해하게 된다.
-#
-# include_unfinished_submaps: true 인 이유 — 마지막에 그리던 조각까지 담는다.
-# false 로 두면 방금 지나온 구간이 통째로 빠질 수 있다.
-echo "--- 5-1) Cartographer 원본 상태 ---"
-# timeout 을 씌우는 이유 — `ros2 service call` 은 서비스가 없으면 "waiting for
-# service to become available..." 을 찍으며 **무한히 기다린다.** SLAM 이 이미
-# 내려갔을 때 저장 스크립트가 통째로 멈춘다.
-if timeout 20 ros2 service call /write_state cartographer_ros_msgs/srv/WriteState \
-     "{filename: '$PBSTREAM', include_unfinished_submaps: true}" \
-     2>/dev/null | grep -q "code=0"; then
-  ok "pbstream 저장 완료  $(stat -c%s "$PBSTREAM" 2>/dev/null || echo 0) bytes"
-else
-  warn "pbstream 을 저장하지 못했다. 지도(pgm·png·yaml)는 정상이다."
-  warn "  SLAM 이 이미 내려갔거나 /write_state 가 없을 때 그렇다. 필요하면 수동으로:"
-  warn "    ros2 service call /write_state cartographer_ros_msgs/srv/WriteState \\"
-  warn "      \"{filename: '$PBSTREAM', include_unfinished_submaps: true}\""
-fi
-echo
-
-# ---------------------------------------------------------------------------
 # 6. 검증
 # ---------------------------------------------------------------------------
 echo "--- 5) 검증 ---"
@@ -214,12 +183,6 @@ for f in "$PGM" "$PNG" "$YAML"; do
     bad "$(basename "$f") 없음"
   fi
 done
-# pbstream 은 없어도 지도는 유효하다. 없다고 실패로 표시하지 않는다.
-if [ -f "$PBSTREAM" ]; then
-  ok "$(basename "$PBSTREAM")  $(stat -c%s "$PBSTREAM") bytes"
-else
-  warn "$(basename "$PBSTREAM") 없음 (주행에는 지장 없음)"
-fi
 
 # pgm 과 png 의 픽셀 크기가 다르면 앱 캔버스의 좌표 변환이 어긋난다.
 # 앱은 yaml 의 resolution·origin 을 png 픽셀에 적용하기 때문이다.
