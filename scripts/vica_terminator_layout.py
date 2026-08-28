@@ -649,20 +649,22 @@ PROFILES: dict[str, Profile] = {
     ),
     "drive": Profile(
         layout="vica_drive",
-        title="VICA bringup (drive, 음성 제외)",
-        summary="주행 전체에서 ⑫⑬ 음성만 뺀 구성",
+        title="VICA bringup (drive)",
+        summary="주행 전체 + 접근·음성 — vica 와 같은 구성",
         basis=(
-            "매뉴얼 5절이 '⑫⑬은 앱·CLI만 쓸 때 생략 가능'이라고 적었고, 2026-08-01에도"
-            " 목적지 요청을 goto CLI로만 넣은 구간이 있다. GPU 여유도 그만큼 늘어난다."
-            " detector·yolo 는 2026-08-28 사람접근(d4e975a) 실기용으로 넣었다 —"
-            " 컨테이너 래퍼는 ~/workspaces/isaac_ros-dev/vica_detector·vica_yolo_view 다."
+            "원래 '음성 제외' 프로파일이었으나 2026-08-28 에 음성 칸을 다시 넣었다."
+            " 접근→회전 시나리오가 음성 affirm 을 쓰게 되면서 음성 없는 주행이"
+            " 사라졌고, 사용자가 이 이름으로 띄우는 습관을 이미 갖고 있어 이름을"
+            " 유지한 채 vica 와 같은 구성으로 둔다. detector·yolo 는 사람접근"
+            " (d4e975a) 실기용 — 컨테이너 래퍼는 ~/workspaces/isaac_ros-dev/"
+            " vica_detector·vica_yolo_view 다."
         ),
         columns=[
             ["power", "can", "display", "lidar", "safety"],
             ["motor", "d455", "imu", "nvblox", "nav2"],
-            ["mission", "app", "gui", "monitor", "handle"],
-            ["initpose", "goto", "record", "reset", "rviz"],
-            ["detector", "yolo", "check", "teleop", "shell"],
+            ["mission", "app", "gui", "monitor", "handle", "detector"],
+            ["initpose", "goto", "record", "reset", "rviz", "yolo"],
+            ["llm", "stt", "check", "teleop", "shell"],
         ],
     ),
     "app": Profile(
