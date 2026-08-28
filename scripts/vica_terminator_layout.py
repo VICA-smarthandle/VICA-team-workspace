@@ -502,6 +502,40 @@ def build_terms() -> dict[str, Term]:
             mode=HOLD,
                     guard=("turn_guide_node", "user_guidance_d",),
 ),
+        "detector": Term(
+            title="⑮ detector",
+            note=(
+                "사람 감지·접근 요청(Docker). YOLO로 지팡이 든 사람을 찾아",
+                "/vica/person_detection 을 내고, 서서 기다리는 사람이면 Mission",
+                "Manager 에 RequestApproach 를 보낸다 — 로봇이 그 사람에게 간다.",
+                "⑥ d455 가 먼저 떠야 하고, ⑩ mission 이 없으면 요청이 거절만 된다.",
+                "엔진을 바꾸려면 위 화살표로 꺼내 뒤에 경로를 붙인다:",
+                "  ... vica_detector <엔진.engine 경로>'",
+            ),
+            command=(
+                "docker exec -it vica_rs_container bash -lc"
+                " '/workspaces/isaac_ros-dev/vica_detector'"
+            ),
+            mode=HOLD,
+            ros=False,
+                    guard=("vica_detector",),
+),
+        "yolo": Term(
+            title="yolo view",
+            note=(
+                "YOLO 검출 화면(Docker, 진단용). /yolo/annotated 로 내보내므로",
+                "RViz 의 Image 디스플레이로 본다. 주행에 필수가 아니다.",
+                "detector 와 같은 GPU 엔진을 하나 더 돌리므로 검출률 측정이나",
+                "실주행 기록 중에는 끈다 — 켜둔 값이 회차에 섞인다.",
+            ),
+            command=(
+                "docker exec -it vica_rs_container bash -lc"
+                " '/workspaces/isaac_ros-dev/vica_yolo_view'"
+            ),
+            mode=HOLD,
+            ros=False,
+                    guard=("vica_yolo_view",),
+),
         "rviz": Term(
             title="rviz",
             note=(
@@ -616,13 +650,15 @@ PROFILES: dict[str, Profile] = {
         basis=(
             "매뉴얼 5절이 '⑫⑬은 앱·CLI만 쓸 때 생략 가능'이라고 적었고, 2026-08-01에도"
             " 목적지 요청을 goto CLI로만 넣은 구간이 있다. GPU 여유도 그만큼 늘어난다."
+            " detector·yolo 는 2026-08-28 사람접근(d4e975a) 실기용으로 넣었다 —"
+            " 컨테이너 래퍼는 ~/workspaces/isaac_ros-dev/vica_detector·vica_yolo_view 다."
         ),
         columns=[
             ["power", "can", "display", "lidar", "safety"],
             ["motor", "d455", "imu", "nvblox", "nav2"],
             ["mission", "app", "gui", "monitor", "handle"],
             ["initpose", "goto", "record", "reset", "rviz"],
-            ["check", "teleop", "shell"],
+            ["detector", "yolo", "check", "teleop", "shell"],
         ],
     ),
     "app": Profile(
