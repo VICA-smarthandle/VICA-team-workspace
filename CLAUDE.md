@@ -21,7 +21,10 @@ Jetson Orin NX, ROS 2 Humble 기반 실내 안내 AMR 팀 workspace다.
 - motor node는 `/cmd_vel_safe`만 받고 E-stop 래치를 소유하지 않는다.
 - 물리 버튼·앱·STT E-stop은 `emergency_stop_node`에서 통합·중앙 래치한다.
 - 앱·STT의 `false`는 입력 해제일 뿐 reset이 아니다.
-- reset은 모든 원인 해제 뒤 로그인한 관리자가 앱에서만 요청한다.
+- 사람 개입(버튼·앱·STT) 원인의 reset은 모든 원인 해제 뒤 로그인한 관리자가
+  앱에서만 요청한다. 통신 원인(`motor_can`·`*_stale`·`*_waiting`)만으로 걸린
+  래치는 **정지 중일 때** 같은 절차를 한 번 자동으로 밟는다
+  (`AutoRecoveryPolicy`, 2026-08-28). 주행 중 끊김은 여전히 관리자 몫이다.
 - LLM·앱은 Mission Manager, Safety 또는 CAN 경로를 우회하지 않는다.
 
 위 세 항목은 2026-08-01~02 실기로 확인됐다. `[GAP]`에서 내린다.
@@ -32,6 +35,11 @@ Jetson Orin NX, ROS 2 Humble 기반 실내 안내 AMR 팀 workspace다.
 - 관리자 앱 단일 reset: `/app_estop_reset` → `reset_allowed`가 true인 상태
   (`ESTOP_RELEASED_WAIT_RESET`)에서만 통한다. bag 실측에서 "Safety reset 완료 …
   중앙 래치 해제" 확인.
+- 통신 원인 자동 복구: 원인이 통신 계열뿐이고 주행 중(`RUNNING`) 끊김이 아닐 때만
+  `app_emergency_node`가 그 4단계 절차를 대신 호출한다. 절차·순서·fail-closed는
+  바뀌지 않는다. 시험 `test_auto_recovery`. 2026-08-28 젯슨 3노드 통합 실행에서
+  `WAITING_INPUT → FAULT → [AUTO RECOVER] → READY_TO_GO`를 개입 0회로 확인.
+  **실주행 미검증** — 특히 "주행 중 끊김은 자동 복구되지 않는다"는 단위 시험뿐이다.
 - `/cmd_vel_req` 배선: 발행자 6(velocity_smoother + behavior_server) · 구독자 1
   (Safety), `/cmd_vel_safe` 발행자 1(Safety) · 구독자 1(motor). 2026-08-01 실측.
 
