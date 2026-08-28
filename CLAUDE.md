@@ -39,7 +39,8 @@ Jetson Orin NX, ROS 2 Humble 기반 실내 안내 AMR 팀 workspace다.
   `app_emergency_node`가 그 4단계 절차를 대신 호출한다. 절차·순서·fail-closed는
   바뀌지 않는다. 시험 `test_auto_recovery`. 2026-08-28 젯슨 3노드 통합 실행에서
   `WAITING_INPUT → FAULT → [AUTO RECOVER] → READY_TO_GO`를 개입 0회로 확인.
-  **실주행 미검증** — 특히 "주행 중 끊김은 자동 복구되지 않는다"는 단위 시험뿐이다.
+  같은 날 저녁 실기 4항목 통과: 정상기동 reset 0회 / 정지 중 1.43초 자동 복구 /
+  **주행 중 57초 무반응** / **물리 버튼 89초 무반응**(둘 다 앱 reset으로만 해제).
 - `/cmd_vel_req` 배선: 발행자 6(velocity_smoother + behavior_server) · 구독자 1
   (Safety), `/cmd_vel_safe` 발행자 1(Safety) · 구독자 1(motor). 2026-08-01 실측.
 
