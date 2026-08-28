@@ -634,12 +634,16 @@ PROFILES: dict[str, Profile] = {
         layout="vica",
         title="VICA bringup (full)",
         summary="주행 전체 — 매뉴얼 ⓪~⑬ 과 조작·점검 칸",
-        basis="2026-08-01 실기에서 두 번 올린 조합. 음성까지 포함한 종단 구성이다.",
+        basis=(
+            "2026-08-01 실기에서 두 번 올린 조합. 음성까지 포함한 종단 구성이다."
+            " detector·yolo 는 2026-08-28 에 넣었다 — 음성 affirm 으로 접근→회전"
+            " 시나리오를 돌리는 종단 구성은 이 레이아웃이다."
+        ),
         columns=[
             ["power", "can", "display", "lidar", "safety"],
             ["motor", "d455", "imu", "nvblox", "nav2"],
-            ["mission", "app", "gui", "monitor", "handle"],
-            ["initpose", "goto", "record", "reset", "rviz"],
+            ["mission", "app", "gui", "monitor", "handle", "detector"],
+            ["initpose", "goto", "record", "reset", "rviz", "yolo"],
             ["llm", "stt", "check", "teleop", "shell"],
         ],
     ),
