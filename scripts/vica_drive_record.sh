@@ -141,6 +141,10 @@ exec ros2 bag record -o "$OUT" \
   /cmd_vel_req /cmd_vel_safe \
   /odom /wheel/odom /imu/base_link /amcl_pose /tf /tf_static \
   /scan \
+  `# 2026-08-30: 깊이를 2D 로 눌러 costmap 에 넣게 되면서(NAV2-B9) 이 토픽이 없으면` \
+  `# "라이다가 본 것인가 카메라가 본 것인가"를 나중에 못 가린다. 실제로 통창 앞` \
+  `# 멈춤을 진단하려다 막혔다. 173빔 x 15 Hz 라 용량 부담은 거의 없다.` \
+  /camera/depth_scan \
   /plan /local_plan \
   /speed_limit \
   /robot_status /robot/health /robot/events /diagnostics_agg \
