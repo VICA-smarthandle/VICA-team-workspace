@@ -219,7 +219,13 @@ def build_terms() -> dict[str, Term]:
             title="⑥ d455",
             note=(
                 "D455 카메라(Docker). vica_rs 로 컨테이너에 들어간 뒤",
-                "컨테이너 안에서 ./run_d455.sh 를 실행한다.",
+                "컨테이너 안에서 ./run_d455_cloud.sh 를 실행한다.",
+                "",
+                "2026-08-30: run_d455.sh -> run_d455_cloud.sh 로 바꿨다.",
+                "깊이를 2D 스캔으로 눌러 local_costmap 에 넣게 되면서",
+                "포인트클라우드가 있어야 한다(NAV2-B9). run_d455.sh 로 띄우면",
+                "/camera/camera/depth/color/points 가 없어 깊이 소스가 조용히",
+                "아무 일도 하지 않고 라이다만으로 달린다 — 알아채기 어렵다.",
             ),
             command="vica_rs",
             mode=HOLD,
@@ -733,7 +739,13 @@ PROFILES: dict[str, Profile] = {
         ),
         columns=[
             ["power", "can", "display", "lidar", "safety"],
-            ["motor", "d455", "imu", "segnet", "nav2", "nvblox"],
+            # 2026-08-30: segnet·nvblox 를 뺐다(사용자 요청).
+            # 깊이는 이제 nvblox 가 아니라 pointcloud_to_laserscan 이 2D 스캔으로
+            # 눌러 local_costmap 에 넣는다(NAV2-B9). 그 노드는 Nav2 launch 가 함께
+            # 띄우므로 별도 칸이 필요 없다. 사람 마스크(segnet)도 nvblox 를 안 쓰면
+            # 소비처가 없다. 두 칸의 정의는 아래 build_terms 에 그대로 남겨 두었고
+            # vica·vica_sensor 레이아웃에서는 계속 쓴다.
+            ["motor", "d455", "imu", "nav2"],
             ["mission", "app", "gui", "monitor", "handle", "detector"],
             ["initpose", "posecheck", "goto", "record", "reset", "rviz", "yolo"],
             ["llm", "stt", "check", "teleop", "shell"],
