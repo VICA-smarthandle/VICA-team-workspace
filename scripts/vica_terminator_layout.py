@@ -219,7 +219,13 @@ def build_terms() -> dict[str, Term]:
             title="⑥ d455",
             note=(
                 "D455 카메라(Docker). vica_rs 로 컨테이너에 들어간 뒤",
-                "컨테이너 안에서 ./run_d455.sh 를 실행한다.",
+                "컨테이너 안에서 ./run_d455_cloud.sh 를 실행한다.",
+                "",
+                "2026-08-30: run_d455.sh -> run_d455_cloud.sh 로 바꿨다.",
+                "깊이를 2D 스캔으로 눌러 local_costmap 에 넣게 되면서",
+                "포인트클라우드가 있어야 한다(NAV2-B9). run_d455.sh 로 띄우면",
+                "/camera/camera/depth/color/points 가 없어 깊이 소스가 조용히",
+                "아무 일도 하지 않고 라이다만으로 달린다 — 알아채기 어렵다.",
             ),
             command="vica_rs",
             mode=HOLD,
@@ -240,11 +246,51 @@ def build_terms() -> dict[str, Term]:
             mode=AUTO,
                     guard=("imu_base_link_a",),
 ),
+        "segnet": Term(
+            title="⑦-1 segnet",
+            note=(
+                "사람 세그멘테이션(Docker). vica_rs 로 컨테이너에 들어간 뒤",
+                "컨테이너 안에서 ./run_segnet.sh 를 실행한다.",
+                "",
+                "nvblox human 모드의 마스크 공급자다.",
+                "PeopleSemSegNet shuffleseg · TensorRT fp16 · 출력 960x544.",
+                "",
+                "[순서] ⑥ d455 뒤, ⑧ nvblox 앞이다. nvblox 가 use_segmentation:",
+                "true 이면 마스크가 없을 때 깊이 단독 경로까지 닫혀 지도가 아예",
+                "안 자란다(nvblox_node.cpp:258 의 if/else).",
+                "",
+                "[확인] /camera0/segmentation/people_mask 가 카메라와 같은 주기로",
+                "나와야 한다. nvblox 는 깊이·깊이info·마스크·마스크info 네 개를",
+                "시간동기시키므로, 주기가 어긋나면 마스크 경로가 통째로 안 돈다.",
+                "2026-08-15 에 깊이 11.6 Hz · 마스크 5.2 Hz 로 어긋나",
+                "dynamic_map_slice 가 0칸이 됐고 사람이 static 으로 들어갔다.",
+                "그래서 run_d455.sh 를 15 Hz 로 맞췄다.",
+                "",
+                "엔진은 이미 빌드돼 있다(bind 마운트라 컨테이너를 새로 만들어도",
+                "남는다). 없으면 install_peoplesemsegnet_shuffleseg.sh 를 돌린다.",
+            ),
+            # 인자에 따옴표가 중첩돼 rc 파일에서 깨진다. ⑥ d455 와 같은 방식으로
+            # 컨테이너 안 스크립트에 맡긴다(2026-08-15).
+            command="vica_rs",
+            mode=HOLD,
+            ros=False,
+            guard=("component_cont",),
+        ),
         "nvblox": Term(
             title="⑧ nvblox",
             note=(
-                "nvblox(Docker). ⑥ 카메라가 뜬 뒤에 실행한다.",
-                "Nav2 local_costmap이 nvblox_layer를 쓰므로 ⑨보다 먼저다.",
+                "nvblox(Docker). ⑥ 카메라와 ⑦-1 segnet 이 뜬 뒤에 실행한다.",
+                "",
+                "[순서 정정 2026-08-15] 종전 주석은 '⑨ nav2 보다 먼저'였는데",
+                "틀렸다. nvblox 는 global_frame 이 odom 이라 odom→base_footprint",
+                "TF 가 있어야 깊이를 놓을 자리를 정한다. 그 TF 는 nav2 launch 가",
+                "함께 띄우는 wheel_ekf 에서 나온다. 먼저 띄우면 이 로그를 반복하며",
+                "지도가 0칸으로 남는다:",
+                "  Lookup transform failed for frame camera_link",
+                "",
+                "Nav2 쪽이 nvblox 노드를 먼저 필요로 하지는 않는다. local_costmap",
+                "이 요구하는 것은 nvblox_nav2 **플러그인 라이브러리**이고 그것은",
+                "Host 에 설치돼 있다. 노드가 없으면 layer 가 빈 채로 무해하다.",
             ),
             command=(
                 "docker exec -it vica_rs_container bash -lc"
@@ -455,6 +501,36 @@ def build_terms() -> dict[str, Term]:
             mode=HOLD,
             uses_map=True,
         ),
+        # 2026-08-28 복원. 앱 세션이 config 직접 편집으로 넣었던 칸이라 재생성 때
+        # 지워졌다. rc 원문(t_posecheck.rc 백업)에서 그대로 옮겨 생성기에 정착시킨다.
+        "posecheck": Term(
+            title="초기위치 확인",
+            note=(
+                "앱의 \"초기 위치 잡기\"가 부르는 채점 노드(pose_bootstrap_node)다.",
+                "확인(/vica/pose_check)은 점수만 계산하고, 확정(/vica/pose_commit)만",
+                "AMCL 에 반영한다. Nav2 를 켠 뒤 띄우고, 주행 내내 켜 둔다.",
+                "",
+                "시작할 때 scipy/numpy 경고가 길게 찍히지만 고장이 아니다 — 마지막에",
+                "\"준비\"와 \"지도 ... 거리표\" 두 줄이 나오면 정상이다.",
+            ),
+            command="ros2 run vica_nav2 pose_bootstrap_node",
+            mode=HOLD,
+                    guard=("pose_bootstrap_",),
+),
+        # 2026-08-28 복원 — posecheck 와 같은 사연. rc 원문은 t_supervisor.rc.
+        "supervisor": Term(
+            title="map supervisor",
+            note=(
+                "매핑 감독 노드. 앱의 지도 모드가 부르는 시작·저장·종료 서비스의 주인이다.",
+                "앱이 매핑을 시작하면 이 노드가 motor·slam·preview 를 자식으로 띄우고,",
+                "앱이 꺼져도 고아가 남지 않게 소유한다. 지도 모드를 쓰려면 반드시 띄운다.",
+                "",
+                "순서: 이 칸 → app bridge → app GUI → 앱에서 지도 모드.",
+            ),
+            command="ros2 run vica_cartographer mapping_supervisor_node",
+            mode=HOLD,
+                    guard=("mapping_supervi",),
+),
         "record": Term(
             title="record",
             note=(
@@ -501,6 +577,40 @@ def build_terms() -> dict[str, Term]:
             command="ros2 launch vica_user_guidance user_guidance.launch.py",
             mode=HOLD,
                     guard=("turn_guide_node", "user_guidance_d",),
+),
+        "detector": Term(
+            title="⑮ detector",
+            note=(
+                "사람 감지·접근 요청(Docker). YOLO로 지팡이 든 사람을 찾아",
+                "/vica/person_detection 을 내고, 서서 기다리는 사람이면 Mission",
+                "Manager 에 RequestApproach 를 보낸다 — 로봇이 그 사람에게 간다.",
+                "⑥ d455 가 먼저 떠야 하고, ⑩ mission 이 없으면 요청이 거절만 된다.",
+                "엔진을 바꾸려면 위 화살표로 꺼내 뒤에 경로를 붙인다:",
+                "  ... vica_detector <엔진.engine 경로>'",
+            ),
+            command=(
+                "docker exec -it vica_rs_container bash -lc"
+                " '/workspaces/isaac_ros-dev/vica_detector'"
+            ),
+            mode=HOLD,
+            ros=False,
+                    guard=("vica_detector",),
+),
+        "yolo": Term(
+            title="yolo view",
+            note=(
+                "YOLO 검출 화면(Docker, 진단용). /yolo/annotated 로 내보내므로",
+                "RViz 의 Image 디스플레이로 본다. 주행에 필수가 아니다.",
+                "detector 와 같은 GPU 엔진을 하나 더 돌리므로 검출률 측정이나",
+                "실주행 기록 중에는 끈다 — 켜둔 값이 회차에 섞인다.",
+            ),
+            command=(
+                "docker exec -it vica_rs_container bash -lc"
+                " '/workspaces/isaac_ros-dev/vica_yolo_view'"
+            ),
+            mode=HOLD,
+            ros=False,
+                    guard=("vica_yolo_view",),
 ),
         "rviz": Term(
             title="rviz",
@@ -600,29 +710,45 @@ PROFILES: dict[str, Profile] = {
         layout="vica",
         title="VICA bringup (full)",
         summary="주행 전체 — 매뉴얼 ⓪~⑬ 과 조작·점검 칸",
-        basis="2026-08-01 실기에서 두 번 올린 조합. 음성까지 포함한 종단 구성이다.",
+        basis=(
+            "2026-08-01 실기에서 두 번 올린 조합. 음성까지 포함한 종단 구성이다."
+            " detector·yolo 는 2026-08-28 에 넣었다 — 음성 affirm 으로 접근→회전"
+            " 시나리오를 돌리는 종단 구성은 이 레이아웃이다."
+        ),
         columns=[
             ["power", "can", "display", "lidar", "safety"],
-            ["motor", "d455", "imu", "nvblox", "nav2"],
-            ["mission", "app", "gui", "monitor", "handle"],
-            ["initpose", "goto", "record", "reset", "rviz"],
+            ["motor", "d455", "imu", "segnet", "nav2", "nvblox"],
+            ["mission", "app", "gui", "monitor", "handle", "detector"],
+            ["initpose", "posecheck", "goto", "record", "reset", "rviz", "yolo"],
             ["llm", "stt", "check", "teleop", "shell"],
         ],
     ),
     "drive": Profile(
         layout="vica_drive",
-        title="VICA bringup (drive, 음성 제외)",
-        summary="주행 전체에서 ⑫⑬ 음성만 뺀 구성",
+        title="VICA bringup (drive)",
+        summary="주행 전체 + 접근·음성 — vica 와 같은 구성",
         basis=(
-            "매뉴얼 5절이 '⑫⑬은 앱·CLI만 쓸 때 생략 가능'이라고 적었고, 2026-08-01에도"
-            " 목적지 요청을 goto CLI로만 넣은 구간이 있다. GPU 여유도 그만큼 늘어난다."
+            "원래는 ⑫⑬ 음성을 뺀 구성이었으나 2026-08-18 실주행에서 음성→Nav2"
+            " 종단이 완주된 뒤 ⑫를 넣었고(2026-08-19 사용자 요청), 접근→회전"
+            " 시나리오가 음성 affirm 을 쓰게 되면서 2026-08-28 사용자 요청으로"
+            " ⑬ stt 까지 포함했다 — 음성 없는 주행이라는 용도 자체가 사라졌다."
+            " 사용자가 이 이름으로 띄우는 습관을 지키려 이름은 유지하고 구성은"
+            " vica 와 같게 둔다. detector·yolo 는 사람접근(d4e975a) 실기용 —"
+            " 컨테이너 래퍼는 ~/workspaces/isaac_ros-dev/vica_detector·"
+            "vica_yolo_view 다."
         ),
         columns=[
             ["power", "can", "display", "lidar", "safety"],
-            ["motor", "d455", "imu", "nvblox", "nav2"],
-            ["mission", "app", "gui", "monitor", "handle"],
-            ["initpose", "goto", "record", "reset", "rviz"],
-            ["check", "teleop", "shell"],
+            # 2026-08-30: segnet·nvblox 를 뺐다(사용자 요청).
+            # 깊이는 이제 nvblox 가 아니라 pointcloud_to_laserscan 이 2D 스캔으로
+            # 눌러 local_costmap 에 넣는다(NAV2-B9). 그 노드는 Nav2 launch 가 함께
+            # 띄우므로 별도 칸이 필요 없다. 사람 마스크(segnet)도 nvblox 를 안 쓰면
+            # 소비처가 없다. 두 칸의 정의는 아래 build_terms 에 그대로 남겨 두었고
+            # vica·vica_sensor 레이아웃에서는 계속 쓴다.
+            ["motor", "d455", "imu", "nav2"],
+            ["mission", "app", "gui", "monitor", "handle", "detector"],
+            ["initpose", "posecheck", "goto", "record", "reset", "rviz", "yolo"],
+            ["llm", "stt", "check", "teleop", "shell"],
         ],
     ),
     "app": Profile(
@@ -672,7 +798,7 @@ PROFILES: dict[str, Profile] = {
             " 통해 지도에 그대로 닿는다. 8/12 매핑 회차들도 IMU 를 띄운 채였다."
             " Cartographer 가 use_imu_data = false 인 것은 사실이지만 그건 '직접"
             " 구독하지 않는다'는 뜻일 뿐 무관하다는 뜻이 아니다."
-            " ⑦ imu 를 띄운 뒤 20초 동안 로봇을 완전히 세워 둔다 — 그 칸에"
+            " ⑦ imu 를 띄운 뒤 25초 동안 로봇을 완전히 세워 둔다 — 그 칸에"
             " 'Gyro bias calibrated' 가 떠야 유효한 회차다. 'calibration aborted'"
             " 가 뜨면 그 칸을 내렸다 다시 띄운다(2026-08-12 12:56 회차가 그랬다)."
             " EKF 자체는 slam 칸의 launch 가 함께 띄운다. odom→base_footprint TF 의"
@@ -687,7 +813,9 @@ PROFILES: dict[str, Profile] = {
         columns=[
             ["power", "can", "display", "lidar", "safety"],
             ["motor", "d455", "imu", "reset", "slam", "teleop"],
-            ["rviz", "save", "check", "shell"],
+            # supervisor·app 은 앱 지도 모드용이다(2026-08-28 복원). 순서는
+            # supervisor → app — 앱이 매핑 서비스를 부르려면 주인이 먼저 있어야 한다.
+            ["supervisor", "app", "rviz", "save", "check", "shell"],
         ],
     ),
 }
