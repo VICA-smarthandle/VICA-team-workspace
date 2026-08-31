@@ -51,8 +51,10 @@ URDF `camera_pitch` 에는 **부호를 뒤집어** 넣는다(URDF 는 pitch 양�
              CAMERA_PITCH_DEG 도 함께 고친다 — 안 고치면 시험이 막아 준다
 """
 import math
+import re
 import sys
 import time
+from pathlib import Path
 
 import numpy as np
 import rclpy
@@ -172,6 +174,30 @@ def fit_once(node, nframe, timeout=25.0):
     }
 
 
+def current_urdf_pitch():
+    """URDF 에 지금 들어 있는 camera_pitch 를 rad 로 읽는다.
+
+    이 도구가 재는 것은 **URDF 기준 잔여 오차**다. TF 가 이미 camera_pitch 를
+    반영하고 있기 때문이다. 따라서 새 값은 절대값이 아니라
+
+        새 값 = 지금 값 + 잔여 오차를 되돌리는 양
+
+    이다. 2026-08-30 재장착 때 이것을 놓치면 오차가 오히려 커진다는 것이
+    드러나 이 함수를 넣었다(8/29 의 부호 실수와 같은 종류의 함정이다).
+    """
+    here = Path(__file__).resolve().parent.parent
+    for cand in (here / 'vica_ros2_ws' / 'src' / 'vica_description' / 'urdf'
+                 / 'VICA.xacro',):
+        try:
+            txt = cand.read_text(encoding='utf-8', errors='ignore')
+        except OSError:
+            continue
+        m = re.search(r'"camera_pitch"\s+value="(-?[0-9.]+)"', txt)
+        if m:
+            return float(m.group(1)), cand
+    return None, None
+
+
 def main():
     nframe = int(sys.argv[1]) if len(sys.argv) > 1 else 6
     rounds = int(sys.argv[2]) if len(sys.argv) > 2 else 1
@@ -205,14 +231,28 @@ def main():
     if pit.std() > 0.4:
         print('  주의: 회차마다 흩어진다. 앞이 더 트인 곳에서 다시 재라.')
     print()
-    rad = math.radians(-pit.mean())          # 부호를 뒤집어 넣는다
-    print('  URDF 에 넣을 값 (vica_description/urdf/VICA.xacro)')
-    print(f'    <xacro:property name="camera_pitch" value="{rad:.4f}" />'
-          f'   <!-- {abs(pit.mean()):.1f} 도,'
-          f' {"위로" if pit.mean() > 0 else "아래로"} -->')
+    cur, src = current_urdf_pitch()
+    delta = math.radians(-pit.mean())        # 잔여 오차를 되돌리는 양
+    if cur is None:
+        print('  주의: URDF 에서 camera_pitch 를 못 읽었다. 아래는 URDF 가 0 일 때의 값이다.')
+        cur = 0.0
+    else:
+        print(f'  지금 URDF 값   {cur:+.4f} rad ({math.degrees(cur):+.2f} 도)')
+        print(f'  잰 잔여 오차   {math.radians(pit.mean()):+.4f} rad'
+              f' ({pit.mean():+.2f} 도)')
+    new = cur + delta
     print()
-    print(f'  계약 시험도 함께 (vica_nav2/test/test_depth_voxel_contract.py)')
-    print(f'    CAMERA_PITCH_DEG = {-pit.mean():.1f}')
+    print('  URDF 에 넣을 값 (vica_description/urdf/VICA.xacro)')
+    print(f'    <xacro:property name="camera_pitch" value="{new:.4f}" />'
+          f'   <!-- {abs(math.degrees(new)):.1f} 도,'
+          f' {"아래로" if new > 0 else "위로"} -->')
+    print()
+    print('  계약 시험도 함께 (vica_nav2/test/test_depth_voxel_contract.py)')
+    # 시험 상수는 URDF 와 **같은 부호**다(음수 = 위로). 뒤집지 않는다.
+    print(f'    CAMERA_PITCH_DEG = {math.degrees(new):.2f}')
+    if abs(pit.mean()) < 0.5:
+        print()
+        print('  잔여 오차가 0.5도 안이다. 지금 값을 그대로 둬도 된다.')
     print()
     print('  높이 차이가 3 cm 를 넘으면 camera_z 도 다시 본다'
           f'  (지금 {abs(hei.mean()-urdf_z)*100:.1f} cm)')
