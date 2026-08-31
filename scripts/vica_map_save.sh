@@ -70,7 +70,12 @@ echo
 # ---------------------------------------------------------------------------
 echo "--- 1) 덮어쓰기 확인 ---"
 exists=""
-for f in "$PGM" "$PNG" "$YAML"; do
+# 금지구역 파일도 함께 본다(2026-08-31). 지도를 지울 때 이 셋이 같이 지워지지만,
+# 손으로 pgm/png/yaml 만 지운 경우에는 남는다. 그 상태로 같은 이름의 새 지도를
+# 저장하면 **다른 장소의 금지구역이 새 지도에 붙는다.**
+for f in "$PGM" "$PNG" "$YAML" \
+         "$MAPS/$NAME"_keepout.pgm "$MAPS/$NAME"_keepout.yaml \
+         "$MAPS/$NAME"_keepout.json; do
   [ -e "$f" ] && exists="$exists  $f"$'\n'
 done
 if [ -n "$exists" ]; then
