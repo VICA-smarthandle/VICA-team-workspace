@@ -112,14 +112,14 @@ config를 건드리지 않고 무엇을 만들지만 보여준다. 지도가 바
 | 열 | 터미널 |
 | --- | --- |
 | 1열 준비·안전 | ⓪ power · ① can1 / ② display · ③ lidar · ④ safety **(자동 실행)** |
-| 2열 구동·인지 | ⑤ motor · ⑥ d455 / ⑦ imu **(자동 실행)** / ⑧ nvblox · ⑨ nav2 |
+| 2열 구동·인지 | ⑤ motor · ⑥ d455 / ⑦ imu **(자동 실행)** / ⑨ nav2 |
 | 3열 임무·앱·감시 | ⑩ mission · ⑪ app · ⑪-1 monitor · goto · reset |
 | 4열 음성·점검 | ⑫ llm+tts · ⑬ stt · check · teleop · shell |
 
 - **자동 실행**은 바퀴를 움직이지 않고 순서 의존성도 없는 4칸(display·lidar·safety·imu)
   뿐이다. 나머지는 명령을 `history`에 넣어두고 대기한다. **위 화살표 한 번 + Enter**로
   실행하며, 각 칸 상단에 단계 번호와 주의사항이 표시된다.
-- 순서 의존성이 있는 단계(Docker 카메라 → nvblox → Nav2)와 바퀴가 도는 단계는 자동으로
+- 순서 의존성이 있는 단계(Docker 카메라 → Nav2)와 바퀴가 도는 단계는 자동으로
   두지 않는다. §5의 순서를 사람이 통제한다.
 - **① can1 칸은 링크를 자동으로 건드리지 않는다.** 현재 상태만 읽어서 보여주고, 설정
   명령은 사람이 눌러야 나간다. 상태 출력에 `state UP`이 보이면 누르지 않는다 — §11의
@@ -308,7 +308,7 @@ ros2 pkg prefix diagnostic_aggregator
 | ⑤ | motor adapter | Host | **가능** |
 | ⑥ | D455 카메라 | Docker | - |
 | ⑦ | IMU adapter | Host | - |
-| ⑧ | nvblox | Docker | - |
+| ⑧ | nvblox | Docker | **미사용**(2026-08-30~09-01) |
 | ⑨ | Nav2 + EKF + encoder | Host | **가능** |
 | ⑩ | Mission Manager | Host | **가능** |
 | ⑪ | Supervisor 앱 브리지 | Host | - |
@@ -455,12 +455,22 @@ ros2 launch mdrobot_can_control motor_bringup.launch.py
 
 ```bash
 docker exec -it vica_rs_container bash    # 컨테이너가 실행 중일 때
-./run_d455.sh
+./run_d455_cloud.sh
 ```
 
 컨테이너가 없으면 로컬 helper(`vica_rs`)로 새로 기동한다. 스크립트는 기존
 `realsense2_camera`를 정리한 뒤 depth·color 640x480x30, gyro·accel, `align_depth`,
 `unite_imu_method:=2`로 실행한다.
+
+**`run_d455.sh`가 아니라 `run_d455_cloud.sh`다**(2026-08-30 변경, NAV2-B9). 깊이는
+이제 점군으로 나와야 ⑨의 `depth_band_to_scan`이 2D 스캔으로 눌러 costmap에 넣는다.
+`run_d455.sh`로 띄우면 `/camera/depth_scan`이 비고 **카메라 장애물이 통째로 빠진다.**
+그런데 라이다가 계속 도니까 화면상으로는 멀쩡해 보인다 — 낮은 장애물만 조용히
+안 보이게 된다.
+
+```bash
+ros2 topic hz /camera/camera/depth/color/points   # 점군이 나오는지 먼저 본다
+```
 
 ### ⑦ IMU adapter (Host)
 
@@ -473,14 +483,39 @@ ros2 run vica_sensor_adapters imu_base_link_adapter --ros-args \
 
 D455 IMU의 실제 센서 융합 품질은 `[미검증]` 상태다.
 
-### ⑧ nvblox (Docker)
+### ⑧ nvblox (Docker) — 지금은 띄우지 않는다
+
+**Nav2가 nvblox를 쓰지 않는다.** `nav2_params.yaml`의 global·local `plugins` 어디에도
+`nvblox_layer`가 없다. 깊이는 이제 이 경로로 들어간다.
+
+```text
+/camera/camera/depth/color/points   ⑥ run_d455_cloud.sh
+        ↓ depth_band_to_scan (0.30~1.05 m 띠만 눌러 2D 로)
+/camera/depth_scan                  ⑨ Nav2 launch 가 함께 띄운다
+        ↓
+local_costmap 의 observation_sources: scan depth_scan
+```
+
+즉 **별도 단계가 없다. ⑥ 다음은 바로 ⑨다.** 단계 번호는 비워 둔 채 남긴다 —
+지우고 뒤를 당기면 이 문서와 `scripts/vica_terminator_layout.py`의 번호 참조가
+전부 밀린다.
+
+`scripts/vica_terminator_layout.py`의 `vica_drive` 칸 목록에서도 2026-08-30 에
+`segnet`·`nvblox`가 빠졌다(사용자 요청). 이 문서가 마지막까지 남아 있던 자리다.
+
+되살릴 때 필요한 것:
+
+- `nav2_params.yaml`의 `plugins`에 `nvblox_layer`를 다시 넣는다(블록은 지우지 않고
+  남겨 뒀다. `plugins`에 없으면 로드되지 않아 무해하다)
+- `vica_system_monitor`의 `probes.yaml`·`fault_catalog.py`에 nvblox 프로브를 되돌린다.
+  `test_nvblox_is_no_longer_watched`를 먼저 지워야 통과한다
+- 되살리지 않기로 한 근거는 `docs/nav2_backlog.md` §9의 **B4**다(사용자 판정)
 
 ```bash
+# 되살릴 때만 쓴다
 source /opt/ros/humble/setup.bash && source /workspaces/isaac_ros-dev/install/setup.bash
 ros2 launch vica_nvblox_bringup vica_nvblox.launch.py
 ```
-
-Nav2의 `local_costmap`이 `nvblox_layer`를 사용하므로 ⑨보다 먼저 띄운다.
 
 ### ⑨ Nav2 + EKF + encoder (Host)
 
@@ -710,7 +745,7 @@ Mission Manager의 gate는 첫 번째 실패 사유를 로그로 남긴다. 통�
 ```bash
 ros2 topic hz /scan                              # LiDAR
 ros2 topic hz /odom                              # EKF 출력, 발행자 1개인지 확인
-ros2 topic hz /nvblox_node/static_map_slice      # 9Hz 부근이면 nvblox 정상
+ros2 topic hz /camera/depth_scan                 # 카메라 장애물이 들어오는 길
 ros2 lifecycle get /local_costmap/local_costmap  # active [3]
 ros2 node list | grep -E "safety|emergency"      # Safety 3노드
 ```
@@ -801,8 +836,8 @@ motor를 Safety보다 먼저 내려야 승인되지 않은 명령이 남지 않�
 | 증상 | 원인 | 조치 |
 | --- | --- | --- |
 | motor·encoder가 CAN 오류로 죽음 | `can1` DOWN 또는 bitrate 불일치 | ① 재확인, `ip -details link show can1` |
-| `local_costmap`이 `configure`에서 실패 | Host에 `nvblox_nav2` plugin 없음 | `install/nvblox_nav2/lib/libnvblox_nav2.so`가 실제 파일을 가리키는지 확인 후 재빌드 |
-| 장애물이 없는데 전 영역이 lethal | nvblox esdf slice 높이가 바닥을 잡음 | slice 높이 파라미터 확인, ⑧ 재시작 |
+| 앞이 비었는데 전 영역이 lethal | 카메라 마스트 각도가 URDF와 다르다. 바닥이 떠올라 장애물로 잡힌다 | `python3 scripts/vica_camera_pitch.py` 로 재고 URDF pitch 에 반영한다. 2026-08-30 실측 3.04±0.14도 |
+| 카메라 장애물이 통째로 안 잡힘 | ⑥ 을 `run_d455.sh` 로 띄웠다. 점군이 안 나온다 | `ros2 topic hz /camera/camera/depth/color/points` 확인 후 `run_d455_cloud.sh` 로 다시 띄운다 |
 | `/odom`이 튀거나 TF 경고 | `wheel_ekf`를 ⑨와 중복 실행 | 중복 프로세스 종료 후 ⑨만 유지 |
 | 앱이 연결 timeout | Jetson DHCP IP 변경 vs 앱 저장 IP 불일치 | `ip -br addr` 확인 후 앱 접속 주소 갱신 |
 | 2D Goal에 `/cmd_vel_req`가 없음 | Nav2 미기동 또는 remap 누락 | ⑨ 로그와 `ros2 topic info /cmd_vel_req` 확인 |
