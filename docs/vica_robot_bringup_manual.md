@@ -833,7 +833,7 @@ motor를 Safety보다 먼저 내려야 승인되지 않은 명령이 남지 않�
 | --- | --- | --- |
 | `aggregator_node` executable을 못 찾음 | §4.9 apt 미설치 | `sudo apt install -y ros-humble-diagnostic-aggregator` |
 | 센서는 정상인데 `*_STALE`이 계속 뜸 | 구독 QoS 비호환. 감시 도구가 스스로 만든 오탐 | `ros2 topic info -v <topic>`의 발행 QoS를 읽고 `probes.yaml`의 값을 맞춘다. 어댑터 진단 message가 "구독자 붙음 + 0건"을 구분해 표시한다 |
-| nvblox slice 프로브가 통째로 빠짐 | `nvblox_msgs` import 실패(symlink 누락) | optional import라 감시는 계속 뜬다. `install/`의 symlink 확인 후 재빌드 |
+| 앱에 '카메라 인식' 저하가 뜸 | `/camera/depth_scan`이 안 온다 | `ros2 topic hz /camera/depth_scan`. 함께 `CAMERA_DEPTH_STALE`도 뜨면 카메라가, 이것만 뜨면 `depth_band_to_scan` 노드가 죽은 것이다 |
 | Docker 프로세스 CPU가 안 잡힘 | PID namespace 분리로 host `/proc`에서 안 보임 | 해당 프로브를 미구성으로 둔다. 등급은 WARN 상한이라 주행을 막지 않는다 |
 | 앱에 결함이 안 보임 | 앱 화면은 `/robot/health`를 직접 구독한다 | rosbridge 연결과 `ros2 topic hz /robot/health` 확인. `/robot_status`의 `error_reason`은 별도 경로다 |
 | 부품 상태가 "관측 불가" | 정상이다. 고장이 아니라 확인할 수단이 없다는 뜻 | Smart Handle·음성·앱은 상향 관측 경로가 없다. `guideline/vica_architecture.md` 13.3절 |
