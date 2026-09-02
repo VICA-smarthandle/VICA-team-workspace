@@ -244,6 +244,7 @@ uint8 transition        # RAISED=0, ESCALATED=1, REMINDER=2, CLEARED=3
 | `/odom` | `nav_msgs/Odometry` | `robot_localization` EKF | Cartographer, Nav2, 앱 상태 | 표준 출력 계약 및 launch 연결 완료, 실기 검증 필요 |
 | `/navigate_to_pose` | Nav2 action | Mission Manager | Nav2 | 운영 Goal 단일 권한 |
 | `/vica/mission/request_destination` | `RequestDestination` | Flutter, CLI | Mission Manager | UUID·지도·Mission gate를 거치는 공개 요청 |
+| `/vica/mission/request_delivery` | `RequestDestination` | Flutter(물류 배송) | Mission Manager | 공개 요청과 같되 `private` 목적지 허용. 접근 가능·지도 경계·Nav2·E-stop 검사는 동일. 음성 경로 접근 불가(서비스 클라이언트 없음) |
 | `/vica/mission/reload_destinations` | `Trigger` | destination manager | Mission Manager | YAML 변경 후 catalog 교체 |
 | `/vica/mission/cancel_destination` | `MissionCommand` | Flutter | Mission Manager | 진행 중 안내 취소, 실기 `[미검증]` |
 | `/vica/mission/pause_navigation` | `MissionCommand` | Flutter | Mission Manager | 목적지 보관 후 일시정지, 실기 `[미검증]` |
