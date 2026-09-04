@@ -25,6 +25,10 @@ export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 # 2026-08-13 이전에는 여기에 vica_map_0630 이 박혀 있었다. 그래서 0810 지도로
 # 주행하면서 0630 의 좌표를 초기 위치로 찍고 있었다. 장소 이름이 양쪽에 다 있으면
 # 오류도 나지 않는다 — 로봇이 엉뚱한 곳에 있다고 믿은 채 출발할 뿐이다.
+# 2026-09-04: 한글 표시 이름도 받는다. 변환은 vica_map_resolve.py 한 곳이 한다.
+_resolved=$(python3 "$(dirname "${BASH_SOURCE[0]}")/vica_map_resolve.py" -- "${VICA_MAP_ID:-}" 2>/dev/null | cut -f1)
+[ -n "$_resolved" ] && VICA_MAP_ID=$_resolved
+unset _resolved
 if [ -z "$VICA_MAP_ID" ]; then
   VICA_MAP_ID=$(head -1 "$VICA_ROS_WS/maps/CURRENT_MAP" 2>/dev/null | tr -d '[:space:]')
 fi

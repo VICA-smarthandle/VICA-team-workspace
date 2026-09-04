@@ -848,19 +848,37 @@ export VICA_ROOT="${{VICA_ROOT:-$(dirname "$VICA_ROS_WS")}}"
 # CURRENT_MAP 은 "가장 새 지도"가 아니라 "마지막으로 끝까지 성공한 저장"이다.
 # vica_map_save.sh 가 마지막 단계까지 통과했을 때만 쓴다 — png 변환이나 검증에서
 # 멈추면 옛 이름이 그대로 남는다. 반쪽짜리 지도가 현재 지도가 되지 않게 하려는
-# 것이라 의도한 동작이다.
-if [ -n "$VICA_MAP_ID" ]; then
-  VICA_MAP_SRC="환경변수"
-else
-  # 손으로 고쳤을 때를 대비해 첫 줄만 읽고 공백을 턴다.
-  VICA_MAP_ID=$(head -1 "$VICA_ROS_WS/maps/CURRENT_MAP" 2>/dev/null | tr -d '[:space:]')
-  VICA_MAP_SRC="maps/CURRENT_MAP"
-fi
-if [ -z "$VICA_MAP_ID" ]; then
-  VICA_MAP_ID={map_id}
-  VICA_MAP_SRC="fallback — CURRENT_MAP 이 없다"
-fi
-export VICA_MAP_ID VICA_MAP_SRC
+# 것이라 의도한 동작이다. 2026-09-04 부터는 사람이 scripts/vica_map_pick.py 로 고른
+# 지도도 여기에 적힌다 — "로봇이 쓸 지도" 한 곳. 앱의 '(현재)' 표시도 같은 파일이다.
+#
+# 한글 표시 이름(2026-09-04). 파일·yaml·URL 은 계속 영문 id 를 쓰고, 사람이 적는
+# 자리(VICA_MAP_ID)에는 한글 이름이 와도 되게 한 곳에서 id 로 바꾼다. 그 한 곳이
+# scripts/vica_map_resolve.py 다 — goto·initpose 스크립트도 같은 것을 쓴다.
+# 출력은 "id<TAB>출처<TAB>표시이름" 이고, 실패하면 옛 방식(아래)으로 내려간다.
+VICA_MAP_NAME=""
+_vica_out=$(python3 "$VICA_ROOT/scripts/vica_map_resolve.py" \
+  --fallback {map_id} -- "$VICA_MAP_ID" 2>&1)
+case "$_vica_out" in
+  *$'\\t'*)
+    IFS=$'\\t' read -r VICA_MAP_ID VICA_MAP_SRC VICA_MAP_NAME <<< "$_vica_out"
+    ;;
+  *)
+    [ -n "$_vica_out" ] && printf '\\033[0;31m%s\\033[0m\\n' "$_vica_out"
+    if [ -n "$VICA_MAP_ID" ]; then
+      VICA_MAP_SRC="환경변수"
+    else
+      # 손으로 고쳤을 때를 대비해 첫 줄만 읽고 공백을 턴다.
+      VICA_MAP_ID=$(head -1 "$VICA_ROS_WS/maps/CURRENT_MAP" 2>/dev/null | tr -d '[:space:]')
+      VICA_MAP_SRC="maps/CURRENT_MAP"
+    fi
+    if [ -z "$VICA_MAP_ID" ]; then
+      VICA_MAP_ID={map_id}
+      VICA_MAP_SRC="fallback — CURRENT_MAP 이 없다"
+    fi
+    ;;
+esac
+unset _vica_out
+export VICA_MAP_ID VICA_MAP_SRC VICA_MAP_NAME
 export VICA_MAP_YAML="$VICA_ROS_WS/maps/$VICA_MAP_ID.yaml"
 export VICA_DEST_YAML="$HOME/vica_data/destinations/$VICA_MAP_ID/destinations.yaml"
 
@@ -975,8 +993,13 @@ printf '\\n'
 # 가장 값싼 방어다. 목적지 카탈로그를 함께 보는 이유는 지도만 있고 카탈로그가
 # 없는 상태가 실제로 흔하기 때문이다 — 방금 그린 지도가 늘 그렇다.
 MAP_BLOCK = """\
-printf '\\033[0;36m현재 지도\\033[0m %s  \\033[0;37m(%s)\\033[0m\\n' \\
-  "$VICA_MAP_ID" "$VICA_MAP_SRC"
+if [ -n "$VICA_MAP_NAME" ] && [ "$VICA_MAP_NAME" != "$VICA_MAP_ID" ]; then
+  printf '\\033[0;36m현재 지도\\033[0m %s \\033[0;37m(%s · %s)\\033[0m\\n' \\
+    "$VICA_MAP_NAME" "$VICA_MAP_ID" "$VICA_MAP_SRC"
+else
+  printf '\\033[0;36m현재 지도\\033[0m %s  \\033[0;37m(%s)\\033[0m\\n' \\
+    "$VICA_MAP_ID" "$VICA_MAP_SRC"
+fi
 if [ ! -f "$VICA_MAP_YAML" ]; then
   printf '\\033[0;31m[경고]\\033[0m 지도 파일이 없다: %s\\n' "$VICA_MAP_YAML"
   printf '        maps/ 를 확인하고 VICA_MAP_ID 를 다시 정한다.\\n'
@@ -1257,7 +1280,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="maps/CURRENT_MAP 이 없을 때만 쓰는 fallback 지도 id."
         f" 기본 {DEFAULT_MAP_ID}. 평소 지도는 실행 시점에 CURRENT_MAP 이 정하므로"
         " 이 값을 바꿔도 대개 아무 영향이 없다. 지도를 바꾸려면 터미네이터를 띄우기"
-        " 전에 VICA_MAP_ID 를 export 한다.",
+        " 전에 scripts/vica_map_pick.py 로 고르거나 VICA_MAP_ID 를 export 한다"
+        " (한글 표시 이름도 된다, 2026-09-04).",
     )
     parser.add_argument(
         "--ros-ws",

@@ -20,7 +20,12 @@ export RMW_IMPLEMENTATION=rmw_fastrtps_cpp
 # 현재 지도. nav2·mission·app·initpose 와 같은 규칙으로 정한다 —
 # 환경변수 > maps/CURRENT_MAP 순서다. 옛 fallback 은 vica_map_0630 고정이라
 # 터미네이터 밖에서 단독 실행하면 조용히 옛 지도의 목적지를 보냈다.
-MAP=$VICA_MAP_ID
+# 2026-09-04: 한글 표시 이름도 받는다. 이름 -> id 변환은 vica_map_resolve.py 한 곳이
+# 한다(터미네이터 rc 와 같은 도구). 실패하면 옛 방식(id 그대로)으로 내려간다.
+MAP=$(python3 "$(dirname "${BASH_SOURCE[0]}")/vica_map_resolve.py" -- "${VICA_MAP_ID:-}" 2>/dev/null | cut -f1)
+if [ -z "$MAP" ]; then
+  MAP=$VICA_MAP_ID
+fi
 if [ -z "$MAP" ]; then
   MAP=$(head -1 "$VICA_ROS_WS/maps/CURRENT_MAP" 2>/dev/null | tr -d '[:space:]')
 fi

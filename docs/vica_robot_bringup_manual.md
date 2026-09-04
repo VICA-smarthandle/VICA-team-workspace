@@ -89,6 +89,10 @@ launch 인자에 경로를 넘길 때는 `$HOME`을 쓴다. `map:=~/경로` 형�
 ```bash
 python3 ~/VICA-smarthandle/scripts/vica_terminator_layout.py   # 네 레이아웃 생성(최초 1회)
 terminator -l vica                                             # 주행 전체
+# 최신 지도가 아닌 지도로 띄우려면 터미네이터를 띄우기 **전에** 고른다. 번호로 고르고
+# 한글 표시 이름도 통한다(2026-09-04). maps/CURRENT_MAP 을 갱신하므로 nav2·mission·
+# app·initpose·goto 가 전부 같은 지도를 본다.
+python3 ~/VICA-smarthandle/scripts/vica_map_pick.py
 ```
 
 생성기는 터미널별 rc 파일(`~/.config/vica-terminator/`)과 Terminator 레이아웃을 만든다.
