@@ -296,7 +296,9 @@ LLM은 목적지 후보와 대화 응답만 제안한다. LLM, STT, TTS 및 앱�
 상태: 음성 입력 현재 구현 / Smart Handle 준비 확인 구현 목표
 
 1. VICA는 goal이 없는 정지 상태에서 요청을 기다린다.
-2. 사용자는 로봇 가까이에서 push-to-talk 음성 입력을 시작한다.
+2. 사용자가 호출어 "비카야"를 부른다(2026-08-04부터 이것이 유일한 진입 경로다.
+   시각장애인 사용자는 push-to-talk 엔터를 칠 수 없고 핸들에 버튼을 더 달 수 없다).
+   VICA는 짧은 음으로 응답하고 청취 창을 연다. 안내 한 건의 첫 호출에는 말로 답한다.
 3. VICA는 목적지를 말하도록 안내한다.
 4. Smart Handle 통합 뒤에는 서보·LED·햅틱 장치 상태를 확인한다.
 5. 시각장애인 안내 모드에서 필수 Handle 상태가 정상이 아니면 출발하지 않는다.
@@ -309,7 +311,8 @@ LLM은 목적지 후보와 대화 응답만 제안한다. LLM, STT, TTS 및 앱�
 
 상태: 현재 구현
 
-1. `ros_stt_node`가 음성을 텍스트로 변환해 `/vica/user_text`로 발행한다.
+1. `ros_wakeword_node`가 호출 후 발화를 텍스트로 변환해 `/vica/user_text`로 발행한다
+   (`ros_stt_node`는 개발용 push-to-talk 경로로 남아 있고 launch 에는 없다).
 2. `ros_node`가 텍스트와 `/vica/robot_state`를 이용해 의도를 해석한다.
 3. LLM은 `destination_candidate`를 제안한다.
 4. `destination_matcher.py`가 등록 목적지와 비교해 `matched_destination_id`를 결정한다.
