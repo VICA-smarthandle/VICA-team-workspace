@@ -396,6 +396,12 @@ class HashLineStrip(unittest.TestCase):
     def test_hash_to_end_of_line_outside_quotes_is_removed(self):
         self.assertEqual(sc.strip_hash_lines(self.MSG), self.MSG_EXPECTED)
 
+    def test_pure_crlf_file_keeps_crlf(self):
+        self.assertEqual(sc.strip_hash_lines("a\r\n# c\r\nb\r\n"), "a\r\nb\r\n")
+
+    def test_mixed_line_endings_normalize_to_lf(self):
+        self.assertEqual(sc.strip_hash_lines("a\r\nb\n# c\n"), "a\nb\n")
+
     def test_verify_interface_compares_parsed_fields(self):
         try:
             import rosidl_adapter  # noqa: F401

@@ -20,7 +20,9 @@ _DOC_HOLDERS = (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
 
 
 def _newline_of(src):
-    return "\r\n" if "\r\n" in src else "\n"
+    """줄끝이 전부 CRLF 일 때만 CRLF 를 지킨다. 섞여 있으면 LF 로 통일한다."""
+    crlf = src.count("\r\n")
+    return "\r\n" if crlf and crlf == src.count("\n") else "\n"
 
 
 def _docstring_nodes(tree):

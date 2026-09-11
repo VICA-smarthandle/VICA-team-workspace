@@ -39,6 +39,8 @@ git rm -r -q .
 git checkout -q "$DEV" -- .
 python3 "$HERE/strip_comments.py" --root .
 if [ "$DART" = 1 ]; then
+  # 패키지 해석 정보가 있어야 dart format 이 pubspec 의 언어 버전에 맞는 스타일을 고른다
+  [ -f .dart_tool/package_config.json ] || flutter pub get >/dev/null
   dart format lib test >/dev/null
 fi
 if [ "$MANIFEST" = 1 ] && [ -f workspace.repos ]; then
