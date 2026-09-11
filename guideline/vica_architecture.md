@@ -335,10 +335,12 @@ TTS는 STT·LLM·Mission Manager가 발행하는 `/vica/tts_request`를 우선�
 놓쳐도 fail-safe 타임아웃으로 자동 재개한다. 코드·단위 테스트 계약은 연결됐고 실제
 마이크·스피커 재생은 `[미검증]`이다.
 
-청각 안내 node(`ros_audio_cue_node`)는 `/vica/turn_guide`와 `/vica_goal_event`를 구독해
-회전·도착을 소리와 말로 알린다(2026-08-05). 안내음은 TTS 큐를 거치지 않으므로 줄을
-서지 않고 `/vica/tts_state`도 켜지 않는다. 회전 문구는 축약하지 않고 매번 같은 문장을
-쓴다 — 방향 안내는 안전과 직결되어 매번 같은 판단이 가능해야 한다.
+청각 안내 node(`ros_audio_cue_node`, 2026-08-05~)는 **2026-09-11 에 뺐다.** 회전은
+스마트핸들 서보·LED 만으로, 도착은 Mission Manager 의 도착 멘트로 알린다(사용자 결정).
+배경: reSpeaker 재생 장치는 한 프로세스만 열 수 있고 TTS node 가 상시 점유하므로
+(`audio_out._persistent_stream`), 다른 프로세스가 내는 효과음은 조용히 실패해 실기에서
+한 번도 들리지 않았다. **스피커로 나가는 소리는 TTS node 하나만 낸다** — 새 알림음이
+필요하면 별도 node 가 아니라 TTS node 에 재생을 부탁하는 길로 만든다.
 
 음성 저장소 내부 토픽(팀 계약 아님): `/vica/wake`(호출 앵커, 계측용),
 `/vica/sim/event`·`/vica/sim/reset`(`[SIM ONLY]`).
