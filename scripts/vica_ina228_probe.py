@@ -44,14 +44,17 @@ INA228 요점 (TI 데이터시트 SLYS021A, 2022-05):
      장치를 두면 둘이 동시에 답해 값이 깨진다 → 다른 커넥터 또는 A0/A1 로 주소 변경
   3. 전압·풀업: 3.3 V 급전, 풀업은 3.3 V 쪽에만
   4. 신분증: `check` 가 0x5449 / 0x228x 를 보여야 한다
-  5. 션트 저항값(모듈 실크 또는 판매 페이지)을 --shunt 로 넘겨야 전류·적산이 의미를 갖는다
+  5. 션트 저항값을 --shunt 로 넘겨야 전류·적산이 의미를 갖는다.
+     **이 로봇은 외부 분류기 100 A / 75 mV = 0.00075 Ω 를 쓰고 모듈 내부 션트는 제거했다**
+     (2026-09-14). 둘을 함께 두면 병렬로 걸려 측정이 엉킨다 — 새 모듈에서도 같은 작업이 필요하다.
+     로봇 전류는 수 A 수준이라 ADCRANGE=1(상한 54 A·분해능 4배)이 기본이다.
   6. 부호: 전류가 음수면 IN+/IN– 가 뒤집힌 것. 공통 GND 필수. VBUS 는 85 V 상한.
 
 사용법:
     python3 scripts/vica_ina228_probe.py scan                    # i2c-7·1 에서 INA228 찾기 (읽기 전용)
     python3 scripts/vica_ina228_probe.py check --bus 7           # 신분증·설정·진단 비트 (읽기 전용)
-    python3 scripts/vica_ina228_probe.py read --bus 7 --shunt 0.015 --max-current 10
-    python3 scripts/vica_ina228_probe.py read --bus 7 --shunt 0.015 --max-current 10 \
+    python3 scripts/vica_ina228_probe.py read --bus 7 --shunt 0.00075 --max-current 20
+    python3 scripts/vica_ina228_probe.py read --bus 7 --shunt 0.00075 --max-current 20 \
         --csv ~/vica_power_logs/run1.csv
     python3 scripts/vica_ina228_probe.py reset-acc --bus 7      # ENERGY·CHARGE 를 0 으로
     python3 scripts/vica_ina228_probe.py selftest                # 하드웨어 없이 변환 수식 검증
@@ -390,10 +393,12 @@ def main():
         q.add_argument("--addr", type=parse_int, default=0x40, help="I2C 주소 (기본 0x40)")
         q.set_defaults(func=func)
         if name == "read":
-            q.add_argument("--shunt", type=float, required=True, help="션트 저항 [Ω] (예: 0.015)")
+            q.add_argument("--shunt", type=float, required=True,
+                           help="션트 저항 [Ω] (이 로봇의 외부 분류기는 0.00075)")
             q.add_argument("--max-current", type=float, required=True, help="최대 예상 전류 [A]")
-            q.add_argument("--adcrange", type=int, choices=(0, 1), default=0,
-                           help="0=±163.84 mV(기본), 1=±40.96 mV(작은 션트·정밀)")
+            q.add_argument("--adcrange", type=int, choices=(0, 1), default=1,
+                           help="1=±40.96 mV(기본. 이 로봇의 0.75 mΩ 외부 분류기에 맞다), "
+                                "0=±163.84 mV(큰 션트·넓은 범위)")
             q.add_argument("--interval", type=float, default=1.0, help="출력 주기 [s]")
             q.add_argument("--csv", help="CSV 기록 경로")
             q.add_argument("--reset-acc", action="store_true", help="시작할 때 적산을 0 으로")

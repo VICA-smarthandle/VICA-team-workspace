@@ -236,9 +236,15 @@ def build_terms() -> dict[str, Term]:
             note=(
                 "D455 IMU를 base_link 기준으로 바꿔 /imu/base_link 로 낸다.",
                 "⑥ 카메라가 떠야 데이터가 흐른다. 먼저 띄워도 구독만 하고 기다린다.",
+                "",
+                "[C++ 판이다 — 2026-09-09] 자이로 200Hz 는 D455 하드웨어 최저라",
+                "입력을 줄일 수 없는데, 파이썬은 그 194Hz 를 받기만 해도 16.4% 를",
+                "썼다(같은 조건 C++ 0.0%). 어댑터 전체 25.2% -> 3.8% 로 내렸고",
+                "출력값·발행주기는 파이썬 판과 완전히 같음을 대조로 확인했다.",
+                "되돌리려면 아래 패키지명에서 _cpp 만 지우면 된다.",
             ),
             command=(
-                "ros2 run vica_sensor_adapters imu_base_link_adapter --ros-args"
+                "ros2 run vica_sensor_adapters_cpp imu_base_link_adapter --ros-args"
                 " -p input_topic:=/camera/camera/imu"
                 " -p output_topic:=/imu/base_link"
                 " -p target_frame:=base_link"
