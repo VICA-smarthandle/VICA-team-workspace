@@ -146,6 +146,15 @@ exec ros2 bag record -o "$OUT" \
   `# 멈춤을 진단하려다 막혔다. 173빔 x 15 Hz 라 용량 부담은 거의 없다.` \
   /camera/depth_scan \
   /plan /local_plan \
+  `# 2026-08-30: 방향 안내 사전 예고 실주행. 이 토픽이 없으면 "코너 몇 m 앞에서` \
+  `# 예고했나"를 사후에 못 센다. /plan 과 함께 봐야 예고가 경로의 어느 코너를` \
+  `# 가리켰는지 대조된다. 20 Hz·10 Hz 의 작은 메시지라 용량 부담이 없다.` \
+  /vica/turn_guide /vica/smart_handle_state \
+  `# 2026-08-31: 초음파 2채널. costmap 에 들어가는 입력이라, 봉쇄나 회피가` \
+  `# 생겼을 때 "초음파가 본 것인가 라이다가 본 것인가"를 가리려면 원본이` \
+  `# 있어야 한다. 9/1 에 실제로 그 구분을 못 해 지향각을 잘못 의심한 적이 있다.` \
+  `# 채널당 4.8 Hz 의 Range 한 줄이라 용량은 무시할 수준이다.` \
+  /ultrasonic/front_left /ultrasonic/front_right \
   /speed_limit \
   /robot_status /robot/health /robot/events /diagnostics_agg \
   /estop_state /safety_state /app_estop_state /motor/can_ok \

@@ -70,7 +70,12 @@ echo
 # ---------------------------------------------------------------------------
 echo "--- 1) 덮어쓰기 확인 ---"
 exists=""
-for f in "$PGM" "$PNG" "$YAML"; do
+# 금지구역 파일도 함께 본다(2026-08-31). 지도를 지울 때 이 셋이 같이 지워지지만,
+# 손으로 pgm/png/yaml 만 지운 경우에는 남는다. 그 상태로 같은 이름의 새 지도를
+# 저장하면 **다른 장소의 금지구역이 새 지도에 붙는다.**
+for f in "$PGM" "$PNG" "$YAML" \
+         "$MAPS/$NAME"_keepout.pgm "$MAPS/$NAME"_keepout.yaml \
+         "$MAPS/$NAME"_keepout.json; do
   [ -e "$f" ] && exists="$exists  $f"$'\n'
 done
 if [ -n "$exists" ]; then
@@ -217,6 +222,7 @@ cat <<EOF
 
 앱이 보게 될 경로:  /maps/$NAME.png
 확인:               cat $MAPS/CURRENT_MAP
+다른 지도로 띄우기: python3 scripts/vica_map_pick.py   (번호로 고름, 한글 이름도 됨)
 되돌리기:           export VICA_MAP_ID=<옛 이름>   (터미널을 띄우기 전에)
 
 앱 목록에 안 보이면 앱에서 지도 목록 동기화를 한 번 하세요.
