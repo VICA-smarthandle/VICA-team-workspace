@@ -30,7 +30,7 @@
     4. 두 점 사이는 설 수 있는 구역 안에서만 길을 찾는다(다익스트라).
     5. 그 길을 꺾이는 점만 남겨 단순화한다(Douglas-Peucker).
     6. 가까운 점끼리 합친다.
-    7. 15~120° 코너를 반지름 ≤0.5 m 호로 둥글린다(FILLET_*). 나무의 곁가지 접점은
+    7. 15~120° 코너를 반지름 ≤1.0 m 호로 둥글린다(FILLET_*, 안 들어가면 0.75·0.5 로 줄여 본다). 나무의 곁가지 접점은
        등뼈 양쪽으로 호를 두 개 놓아 Y 자로 만든다.
     8. 엣지를 MAX_EDGE_M(1 m) 이하로 쪼갠다 — 직선 복도에 중간역을 박는다.
     9. 양방향 엣지로 GeoJSON 을 쓴다.
@@ -89,7 +89,11 @@ MAX_EDGE_M = 1.00
 #   코너를 지나쳤다 되돌아와 손잡이가 흔들린다(run8 방2→화장실 w ±0.29 왕복 2 s).
 #   반지름은 코너 양쪽 엣지 길이에 맞춰 줄이고, 호 위의 점이 설 수 없는 칸이면 그
 #   코너는 그대로 둔다(둥글리다 벽에 붙는 것보다 뾰족한 편이 낫다).
-FILLET_R = 0.50        # 호 반지름 상한(m). 로봇 최소 회전 R 0.10 보다 넉넉히
+#   2026-09-17 run20: 상한 0.5→1.0. 접점 호 R 0.48 은 0.5 m/s 에서 w 1.04 rad/s 가 필요한데 상한이 0.5
+#   라 로봇이 호 안쪽으로 0.3~0.4 m 잘라 들어가며 w 가 상한에 붙었다. R ≥ v/w = 1.0 이어야 상한 안에서
+#   돈다. 좁은 곳(0630)은 1.0 이 안 들어가면 0.75·0.5 로 줄여 본다 — 뾰족한 채 두는 것보다 낫다.
+FILLET_R = 1.00        # 호 반지름 상한(m). v 0.5 / w 0.5 = 1.0
+FILLET_R_FALLBACK = (0.75, 0.50)   # 상한이 안 들어가는 코너에서 차례로 시도
 FILLET_MIN_DEG = 15    # 이보다 덜 꺾이면 둥글릴 필요 없다
 FILLET_MAX_DEG = 120   # 이보다 더 꺾이면 되돌아가는 스퍼(목적지 끝)라 호가 안 된다
 FILLET_STEP_DEG = 20   # 호를 이 각도마다 점으로 찍는다
@@ -254,7 +258,7 @@ def split_chain_long(nodes, drivable, meta, shape):
     return out
 
 
-def fillet_arc(a, b, c, drivable, meta, shape, t=None):
+def fillet_arc(a, b, c, drivable, meta, shape, t=None, r_max=None):
     """코너 b(a→b→c)를 호(arc) 위의 점들로 바꾼다. 못 바꾸면 None.
 
     양쪽 엣지 위에 접점 P1·P2 를 잡고 그 사이를 반지름 R 의 호로 잇는다. R 은
@@ -274,7 +278,7 @@ def fillet_arc(a, b, c, drivable, meta, shape, t=None):
     # 접점 거리 t = R / tan(phi/2). 엣지의 45 % 안에 들도록 R 을 줄인다.
     tan_half = math.tan(phi / 2.0)
     if t is None:
-        R = min(FILLET_R, 0.45 * min(la, lc) * tan_half)
+        R = min(r_max or FILLET_R, 0.45 * min(la, lc) * tan_half)
     else:
         R = t * tan_half
     if R < 0.15:
@@ -302,12 +306,21 @@ def fillet_arc(a, b, c, drivable, meta, shape, t=None):
     return pts
 
 
+def fillet_try(a, b, c, drivable, meta, shape):
+    """상한 반지름부터 시도해 들어가는 첫 호를 돌려준다. 다 안 들어가면 None(뾰족한 채)."""
+    for r in (FILLET_R,) + tuple(FILLET_R_FALLBACK):
+        pts = fillet_arc(a, b, c, drivable, meta, shape, r_max=r)
+        if pts:
+            return pts
+    return None
+
+
 def fillet_corners(nodes, drivable, meta, shape):
     """고리의 꺾이는 노드를 호 위의 점 여러 개로 바꾼다."""
     n = len(nodes)
     out = []
     for i, nd in enumerate(nodes):
-        pts = fillet_arc(nodes[i - 1]['xy'], nd['xy'], nodes[(i + 1) % n]['xy'],
+        pts = fillet_try(nodes[i - 1]['xy'], nd['xy'], nodes[(i + 1) % n]['xy'],
                          drivable, meta, shape)
         out.extend(pts if pts else [nd])
     return out
@@ -320,14 +333,14 @@ def fillet_chain(nodes, drivable, meta, shape):
     out = [nodes[0]]
     for i in range(1, len(nodes) - 1):
         nd = nodes[i]
-        pts = None if nd.get('fillet') else fillet_arc(
+        pts = None if nd.get('fillet') else fillet_try(
             nodes[i - 1]['xy'], nd['xy'], nodes[i + 1]['xy'], drivable, meta, shape)
         out.extend(pts if pts else [nd])
     out.append(nodes[-1])
     return out
 
 
-def _tangent_limit(a, b, c):
+def _tangent_limit(a, b, c, r_max=None):
     """코너 b 에서 fillet_arc 가 기본으로 잡는 접점 거리(엣지 45 %·R 상한)."""
     va = (a[0] - b[0], a[1] - b[1]); vc = (c[0] - b[0], c[1] - b[1])
     la, lc = math.hypot(*va), math.hypot(*vc)
@@ -338,7 +351,7 @@ def _tangent_limit(a, b, c):
     tan_half = math.tan(phi / 2.0)
     if tan_half < 1e-6:
         return None
-    return min(FILLET_R, 0.45 * min(la, lc) * tan_half) / tan_half
+    return min(r_max or FILLET_R, 0.45 * min(la, lc) * tan_half) / tan_half
 
 
 def fillet_junction(chains, j_px, spur_i, drivable, meta, shape):
@@ -365,12 +378,16 @@ def fillet_junction(chains, j_px, spur_i, drivable, meta, shape):
     if len(W) < 2 or len(E) < 2:
         return False
     J, w1, e1, s1 = spur[0]['xy'], W[-2]['xy'], E[1]['xy'], spur[1]['xy']
-    tw, te = _tangent_limit(w1, J, s1), _tangent_limit(e1, J, s1)
-    if tw is None or te is None:
-        return False
-    t = min(tw, te)
-    arc_w = fillet_arc(w1, J, s1, drivable, meta, shape, t=t)
-    arc_e = fillet_arc(e1, J, s1, drivable, meta, shape, t=t)
+    arc_w = arc_e = None
+    for r in (FILLET_R,) + tuple(FILLET_R_FALLBACK):      # 상한부터, 안 들어가면 줄여 본다
+        tw, te = _tangent_limit(w1, J, s1, r), _tangent_limit(e1, J, s1, r)
+        if tw is None or te is None:
+            return False
+        t = min(tw, te)
+        arc_w = fillet_arc(w1, J, s1, drivable, meta, shape, t=t)
+        arc_e = fillet_arc(e1, J, s1, drivable, meta, shape, t=t)
+        if arc_w is not None and arc_e is not None:
+            break
     if arc_w is None or arc_e is None:
         return False
     s_new = arc_w[-1]                       # S'. 같은 t 라 arc_e[-1] 과 같은 점
