@@ -24,8 +24,9 @@
     4. 두 점 사이는 회전 가능 구역 안에서만 길을 찾는다(다익스트라).
     5. 그 길을 꺾이는 점만 남겨 단순화한다(Douglas-Peucker).
     6. 가까운 점끼리 합친다.
-    7. 엣지를 MAX_EDGE_M(1 m) 이하로 쪼갠다 — 직선 복도에 중간역을 박는다.
-    8. 양방향 엣지로 GeoJSON 을 쓴다.
+    7. 15~120° 코너를 반지름 ≤0.5 m 호로 둥글린다(FILLET_*).
+    8. 엣지를 MAX_EDGE_M(1 m) 이하로 쪼갠다 — 직선 복도에 중간역을 박는다.
+    9. 양방향 엣지로 GeoJSON 을 쓴다.
 
 형식
     /opt/ros/humble/share/nav2_route/graphs/*.geojson 의 실제 파일에서 확인했다.
@@ -74,6 +75,16 @@ MERGE_M = 0.60         # 이보다 가까운 노드는 하나로 합친다
 #   1.0 m = 로봇 한 대 길이. 더 촘촘히 해도 마지막 엣지에서는 같은 일이 나므로
 #   (그건 BT 의 IsRoutePathUsable 이 막는다) 그 이하로 줄일 이유가 없다.
 MAX_EDGE_M = 1.00
+# 코너 둥글리기 (fillet). 2026-09-16 run8.
+#   nav2_route 의 smooth_corners 는 일직선 위 중간역(각 0°)을 둥글리다 NaN 을 넣어
+#   껐다. 대신 여기서 코너를 호(arc)로 바꿔 GeoJSON 에 굽는다. 뾰족한 채 두면 DWB 가
+#   코너를 지나쳤다 되돌아와 손잡이가 흔들린다(run8 방2→화장실 w ±0.29 왕복 2 s).
+#   반지름은 코너 양쪽 엣지 길이에 맞춰 줄이고, 호 위의 점이 설 수 없는 칸이면 그
+#   코너는 그대로 둔다(둥글리다 벽에 붙는 것보다 뾰족한 편이 낫다).
+FILLET_R = 0.50        # 호 반지름 상한(m). 로봇 최소 회전 R 0.10 보다 넉넉히
+FILLET_MIN_DEG = 15    # 이보다 덜 꺾이면 둥글릴 필요 없다
+FILLET_MAX_DEG = 120   # 이보다 더 꺾이면 되돌아가는 스퍼(목적지 끝)라 호가 안 된다
+FILLET_STEP_DEG = 20   # 호를 이 각도마다 점으로 찍는다
 
 
 def load_map(name):
@@ -180,6 +191,58 @@ def split_long_edges(nodes, drivable, meta, shape):
             if (rr, cc) != (r, c):
                 wx, wy = to_world(rr, cc, meta, shape)
             out.append({'xy': (wx, wy), 'px': (rr, cc), 'filler': True})
+    return out
+
+
+def fillet_corners(nodes, drivable, meta, shape):
+    """꺾이는 노드를 호(arc) 위의 점 여러 개로 바꾼다.
+
+    노드 b 에서 a→b→c 로 꺾이는 각을 θ 라 할 때, 양쪽 엣지 위에 접점 P1·P2 를
+    잡고 그 사이를 반지름 R 의 호로 잇는다. R 은 FILLET_R 을 상한으로, 접점이
+    엣지의 45 % 를 넘지 않게 줄인다(다음 코너와 겹치지 않도록).
+    """
+    n = len(nodes)
+    out = []
+    for i, nd in enumerate(nodes):
+        a, b, c = nodes[i - 1]['xy'], nd['xy'], nodes[(i + 1) % n]['xy']
+        va = (a[0] - b[0], a[1] - b[1]); vc = (c[0] - b[0], c[1] - b[1])
+        la, lc = math.hypot(*va), math.hypot(*vc)
+        if la < 1e-6 or lc < 1e-6:
+            out.append(nd); continue
+        cosphi = max(-1.0, min(1.0, (va[0]*vc[0] + va[1]*vc[1]) / (la * lc)))
+        phi = math.acos(cosphi)                # b 에서 본 내각
+        theta = math.pi - phi                  # 진행 방향이 꺾이는 각
+        if not (math.radians(FILLET_MIN_DEG) <= theta <= math.radians(FILLET_MAX_DEG)):
+            out.append(nd); continue
+        # 접점 거리 t = R / tan(phi/2). 엣지의 45 % 안에 들도록 R 을 줄인다.
+        tan_half = math.tan(phi / 2.0)
+        R = min(FILLET_R, 0.45 * min(la, lc) * tan_half)
+        if R < 0.15:
+            out.append(nd); continue
+        t = R / tan_half
+        ua = (va[0] / la, va[1] / la); uc = (vc[0] / lc, vc[1] / lc)
+        p1 = (b[0] + ua[0] * t, b[1] + ua[1] * t)
+        p2 = (b[0] + uc[0] * t, b[1] + uc[1] * t)
+        bis = (ua[0] + uc[0], ua[1] + uc[1]); lb = math.hypot(*bis)
+        if lb < 1e-6:
+            out.append(nd); continue
+        d_center = R / math.sin(phi / 2.0)
+        o = (b[0] + bis[0] / lb * d_center, b[1] + bis[1] / lb * d_center)
+        a1 = math.atan2(p1[1] - o[1], p1[0] - o[0]); a2 = math.atan2(p2[1] - o[1], p2[0] - o[0])
+        sweep = (a2 - a1 + math.pi) % (2 * math.pi) - math.pi    # 짧은 쪽으로
+        steps = max(2, int(math.ceil(abs(sweep) / math.radians(FILLET_STEP_DEG))))
+        pts = []
+        ok = True
+        for k in range(steps + 1):
+            ang = a1 + sweep * k / steps
+            x, y = o[0] + R * math.cos(ang), o[1] + R * math.sin(ang)
+            r, col = to_px(x, y, meta, shape)
+            if not (0 <= r < shape[0] and 0 <= col < shape[1]) or not drivable[r, col]:
+                ok = False; break
+            pts.append({'xy': (x, y), 'px': (r, col), 'fillet': True})
+        if not ok:
+            out.append(nd); continue
+        out.extend(pts)
     return out
 
 
@@ -304,6 +367,8 @@ def build(name, loop_only):
     if len(nodes) > 2 and math.dist(nodes[0]['xy'], nodes[-1]['xy']) < MERGE_M:
         nodes.pop()
 
+    # 코너를 호로 바꾼다(생성기 자체 둥글리기 — nav2 smooth_corners 는 끈다).
+    nodes = fillet_corners(nodes, drivable, meta, img.shape)
     # 긴 엣지를 MAX_EDGE_M 이하로 쪼갠다. 꺾이는 점(위)은 그대로 두고 사이만 채운다.
     nodes = split_long_edges(nodes, drivable, meta, img.shape)
 
@@ -418,6 +483,13 @@ def main():
                   for i in range(n))
     print(f'  노드 {n}개 · 엣지 {e}개(양방향) · 레일 총 길이 {total:.1f} m')
     print(f'  가장 긴 엣지 {longest:.2f} m (상한 {MAX_EDGE_M:.2f} m)')
+    turns = []
+    for i in range(n):
+        a, b, c = g['nodes'][i - 1]['xy'], g['nodes'][i]['xy'], g['nodes'][(i + 1) % n]['xy']
+        v1 = (b[0] - a[0], b[1] - a[1]); v2 = (c[0] - b[0], c[1] - b[1])
+        turns.append(abs(math.degrees(math.atan2(v1[0]*v2[1] - v1[1]*v2[0], v1[0]*v2[0] + v1[1]*v2[1]))))
+    mid = [t for t in turns if 30 <= t <= FILLET_MAX_DEG]
+    print(f'  30~{FILLET_MAX_DEG}° 꺾임 남은 노드 {len(mid)}개 (둥글리기 목표 0) · 되돌림(>{FILLET_MAX_DEG}°) {sum(1 for t in turns if t > FILLET_MAX_DEG)}개')
     print(f'  {gj}')
     print(f'  {png}')
     return 0
