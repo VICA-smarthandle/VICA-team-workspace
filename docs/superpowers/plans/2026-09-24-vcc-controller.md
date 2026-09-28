@@ -1171,7 +1171,8 @@ double curvePreviewLimit(const Path & path, const SpeedParams & p)
     if (la * lb * lc < 1e-12) {continue;}
     const double k = 2.0 * std::abs(ax * by - ay * bx) / (la * lb * lc);   // Menger 곡률
     const double vl = curveLimitAt(k, p);
-    limit = std::min(limit, std::sqrt(vl * vl + 2.0 * p.curve_decel * s[j]));
+    // 곡률을 본 세 점 중 가장 가까운 점(s[j-1])까지 거리로 계산한다 — 가운데 점 기준이면 한 칸(0.2 m) 늦게 줄인다.
+    limit = std::min(limit, std::sqrt(vl * vl + 2.0 * p.curve_decel * s[j - 1]));
   }
   return limit;
 }
