@@ -37,7 +37,7 @@
   Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01EQr7nT17VwBmqKhRyKscpi
   ```
-- RPP 에서 가져온 코드(`transformGlobalPlan`, `circleSegmentIntersection`)가 들어간 파일은 Apache 2.0 저작권 머리말을 유지하고 "VICA 수정" 표시를 붙인다.
+- RPP·FeasiblePathHandler 에서 가져온 코드(`circleSegmentIntersection`, 경로 창 계산)가 들어간 파일은 Apache 2.0 저작권 머리말을 유지하고 "VICA 수정" 표시를 붙인다.
 
 ## Review Focus
 
@@ -46,7 +46,7 @@
 2. **collision_monitor·예외로 실제 속도가 0 이 된 뒤 재출발**: 출력단이 옛 명령(0.4 m/s)에서 이어 가면 출발이 튄다.
    → Task 5 에 "측정 속도로 재동기화" 시험을 넣는다.
 3. **도착 정렬 3회 실패 뒤 같은 goal 재시도**: 코어가 Hold 에 영원히 갇힐 수 있다.
-   → Task 12 에 "0.5 s 넘게 호출이 끊기면 코어 초기화" 시험을 넣는다.
+   → Task 13 에 "0.5 s 넘게 호출이 끊기면 코어 초기화" 시험을 넣는다.
 4. **초음파 한 번 튄 값**: 한 번만 가까이 찍힌 값은 무시해야 한다(요구 4 "너무 예민하지 않게").
    → Task 6 에 "연속 2회 불일치 거부" 시험을 넣는다.
 5. **두 차선 점수가 거의 같을 때의 흔들림**: 차선이 매 주기 바뀌면 MPPI 식 비틀거림이 된다.
@@ -72,6 +72,7 @@ vica_ros2_ws/src/vica_vcc_controller/
     core/align_planner.hpp                도착 한 번 회전·넘침 보정
     core/state_machine.hpp                상황 4개·전환표
     core/vcc_core.hpp                     한 주기 조립
+    core/path_window.hpp                  경로 창(가까운 점·지나온 길 지우기·끝 2점 유지) — FeasiblePathHandler 개념
     vcc_controller.hpp                    nav2_core::Controller 어댑터
   src/core/*.cpp                          (위 헤더 하나당 하나, types 제외)
   src/vcc_controller.cpp
@@ -2000,7 +2001,7 @@ Expected: 9개 PASS.
 
 값 근거:
 
-- `arc_w` 0.45 는 DWB 시절 출발 U턴 실측값이다. |w| 0.42~0.47 로 "부드러웠다"(devlog 2026-09-17-route-0903d §5.4). 설계서 11절은 0.5 로 적었지만, 손잡이 끝 속도를 줄이려고 실측값을 쓴다. 설계서도 함께 고친다(Task 14).
+- `arc_w` 0.45 는 DWB 시절 출발 U턴 실측값이다. |w| 0.42~0.47 로 "부드러웠다"(devlog 2026-09-17-route-0903d §5.4). 설계서 11절은 0.5 로 적었지만, 손잡이 끝 속도를 줄이려고 실측값을 쓴다. 설계서도 함께 고친다(Task 15).
 - `pivot_w` 0.35 는 지금 RPP `rotate_to_heading_angular_vel` 이다.
 
 - [ ] **Step 1: 실패하는 시험** — `test/test_turn_planner.cpp`
@@ -3228,7 +3229,288 @@ Expected: 9개 PASS.
 
 ---
 
-### Task 12: Nav2 플러그인 어댑터 (`VccController`)
+### Task 12: 경로 창 (`PathWindow`) — FeasiblePathHandler 개념
+
+**왜 이 Task 가 있나(2026-09-28 사용자 승인):**
+- Nav2 최신판(Jazzy 이후)은 경로 전처리를 `FeasiblePathHandler` 라는 별도 부품으로 뗐다. Humble 에는 없다.
+- 이 부품이 하는 일(가까운 점 찾기·지나온 길 지우기·costmap 범위로 자르기)은 원래 RPP·MPPI 안에 있던 코드다.
+- VCC 도 같은 일을 로봇과 무관한 부품 하나로 떼어 둔다. 얻는 것은 셋이다.
+  - 경로 관련 설정이 한 곳에 모인다.
+  - 유턴처럼 되돌아오는 경로를 로봇 없이 시험할 수 있다.
+  - 나중에 Jazzy 이상으로 올리면 이 부품만 공식 것으로 바꾸면 된다.
+- 가져오는 것(원본 `nav2_controller/plugins/feasible_path_handler.cpp`, main 2026-09-28 확인):
+  - ① **경로 끝에서 점 2개 남기기**: 끝 방향을 계산하려면 2점이 필요하다. VCC 는 레일 방향 각·차선 계산에 끝 방향을 쓴다.
+  - ② **가까운 점 찾는 범위** `max_robot_pose_search_dist`: 기본은 지금과 같은 costmap 반폭 3.0 이다. 실제 사고 기록이 없으므로 값은 바꾸지 않고 설정으로만 뺀다.
+  - ③ **점 1개 경로 거부** `reject_unit_path`: **기본 꺼짐**. run35 도착 yaw 3/8 틀어짐(1점 경로 끝 방향으로 성공 선언)과 연결된다. 켤지는 사용자가 나중에 정한다.
+- 가져오지 않는 것:
+  - `enforce_path_inversion`: 후진 금지(§11)라 쓸 일이 없다.
+  - `enforce_path_rotation`: 켜면 planner 격자의 제자리 회전 조각마다 멈춰서 돈다. 호로 도는 유턴 요구와 정반대다.
+
+**Files:**
+- Create: `include/vica_vcc_controller/core/path_window.hpp`, `src/core/path_window.cpp`
+- Test: `test/test_path_window.cpp`
+- Modify: `CMakeLists.txt` (vcc_core 에 `src/core/path_window.cpp`, 시험 `test_path_window`)
+
+**Interfaces:**
+- Consumes: `Path`, `Pose2D`, `toChild`, `normalizeAngle`
+- Produces:
+  - `struct PathWindowParams{double max_robot_pose_search_dist=3.0; bool reject_unit_path=false;}`
+  - `enum class WindowStatus{Ok, EmptyPlan, UnitPath, NoPosesInWindow}`
+  - `class PathWindow`
+    - `void setPlan(Path plan_frame_path)`
+    - `bool empty() const`, `const Path & plan() const`
+    - `WindowStatus window(const Pose2D & robot_in_plan, double max_extent, Path & out)`
+      - 남은 경로에서 가까운 점부터 max_extent 안의 점들을 out 에 넣는다(plan 좌표계).
+      - 지나온 부분은 지운다.
+  - `Pose2D toRobotFrame(const Pose2D & robot, const Pose2D & p)`: plan 좌표 → 로봇 좌표(위치·방향)
+
+- [ ] **Step 1: 실패하는 시험** — `test/test_path_window.cpp`
+
+```cpp
+#include <gtest/gtest.h>
+#include <cmath>
+#include "vica_vcc_controller/core/path_window.hpp"
+
+using namespace vica_vcc_controller::core;
+
+namespace
+{
+Path straight(double length)
+{
+  Path p;
+  for (double x = 0.0; x <= length + 1e-9; x += 0.05) {p.push_back({x, 0.0, 0.0});}
+  return p;
+}
+
+// 1.0 m 나갔다가 옆으로 2 cm 옮겨 되돌아오는 경로(유턴). 되돌아오는 쪽이 로봇에 약간 더 가깝다.
+Path uturn()
+{
+  Path p;
+  for (double x = 0.0; x <= 1.0 + 1e-9; x += 0.05) {p.push_back({x, 0.0, 0.0});}
+  for (double x = 1.0; x >= -1e-9; x -= 0.05) {p.push_back({x, 0.02, M_PI});}
+  return p;
+}
+}  // namespace
+
+TEST(PathWindow, EmptyPlanIsReported)
+{
+  PathWindow w;
+  Path out;
+  EXPECT_EQ(w.window({0, 0, 0}, 3.0, out), WindowStatus::EmptyPlan);
+}
+
+TEST(PathWindow, UnitPathIsAcceptedUnlessRejected)
+{
+  // ③ 기본 꺼짐: 지금 동작(1점 경로를 받는다)을 바꾸지 않는다.
+  PathWindow on_default;
+  on_default.setPlan({{0.1, 0.0, 0.3}});
+  Path out;
+  EXPECT_EQ(on_default.window({0, 0, 0}, 3.0, out), WindowStatus::Ok);
+  EXPECT_EQ(out.size(), 1u);
+
+  PathWindowParams p;
+  p.reject_unit_path = true;
+  PathWindow strict(p);
+  strict.setPlan({{0.1, 0.0, 0.3}});
+  EXPECT_EQ(strict.window({0, 0, 0}, 3.0, out), WindowStatus::UnitPath);
+}
+
+TEST(PathWindow, StartsAtClosestPointAndPrunesThePast)
+{
+  PathWindow w;
+  w.setPlan(straight(3.0));
+  Path out;
+  ASSERT_EQ(w.window({1.0, 0.03, 0.0}, 3.0, out), WindowStatus::Ok);
+  EXPECT_NEAR(out.front().x, 1.0, 1e-9);
+  EXPECT_NEAR(w.plan().front().x, 1.0, 1e-9);   // 지나온 1.0 m 는 지워졌다
+  // 다음 주기에 로봇이 조금 뒤로 밀려도 지운 길로 돌아가지 않는다
+  ASSERT_EQ(w.window({0.8, 0.0, 0.0}, 3.0, out), WindowStatus::Ok);
+  EXPECT_NEAR(out.front().x, 1.0, 1e-9);
+}
+
+TEST(PathWindow, KeepsTwoPointsAtTheEnd)
+{
+  // ① 경로 끝을 지나쳐도 끝 방향을 계산할 2점이 남는다.
+  PathWindow w;
+  w.setPlan(straight(0.5));
+  Path out;
+  ASSERT_EQ(w.window({0.9, 0.0, 0.0}, 3.0, out), WindowStatus::Ok);
+  ASSERT_EQ(out.size(), 2u);
+  EXPECT_NEAR(out[0].x, 0.45, 1e-9);
+  EXPECT_NEAR(out[1].x, 0.5, 1e-9);
+}
+
+TEST(PathWindow, ClipsToCostmapExtent)
+{
+  PathWindow w;
+  w.setPlan(straight(10.0));
+  Path out;
+  ASSERT_EQ(w.window({0.0, 0.0, 0.0}, 3.0, out), WindowStatus::Ok);
+  EXPECT_LE(out.back().x, 3.0 + 1e-9);
+  EXPECT_GE(out.back().x, 2.95 - 1e-9);
+}
+
+TEST(PathWindow, DefaultSearchCanJumpToTheReturnLegOfATightUturn)
+{
+  // ② 가 왜 설정으로 빠져 있는지를 고정한다. 기본 3.0 m 는 되돌아오는 구간(경로 거리 1.7 m)까지 찾는다.
+  PathWindow w;
+  w.setPlan(uturn());
+  Path out;
+  ASSERT_EQ(w.window({0.3, 0.015, 0.0}, 3.0, out), WindowStatus::Ok);
+  EXPECT_NEAR(out.front().yaw, M_PI, 1e-9);     // 유턴을 건너뛰었다
+}
+
+TEST(PathWindow, ShorterSearchDistanceKeepsTheOutboundLeg)
+{
+  PathWindowParams p;
+  p.max_robot_pose_search_dist = 0.5;
+  PathWindow w(p);
+  w.setPlan(uturn());
+  Path out;
+  ASSERT_EQ(w.window({0.3, 0.015, 0.0}, 3.0, out), WindowStatus::Ok);
+  EXPECT_NEAR(out.front().yaw, 0.0, 1e-9);
+  EXPECT_NEAR(out.front().x, 0.3, 1e-9);
+}
+
+TEST(PathWindow, RobotFrameConversion)
+{
+  const Pose2D robot{1.0, 1.0, M_PI / 2};
+  const Pose2D q = toRobotFrame(robot, {1.0, 2.0, M_PI / 2});
+  EXPECT_NEAR(q.x, 1.0, 1e-9);
+  EXPECT_NEAR(q.y, 0.0, 1e-9);
+  EXPECT_NEAR(q.yaw, 0.0, 1e-9);
+}
+```
+
+- [ ] **Step 2: 실패 확인** — Run: `colcon build --packages-select vica_vcc_controller` / Expected: FAIL (`path_window.hpp` 없음)
+
+- [ ] **Step 3: 구현** — `core/path_window.hpp`
+
+```cpp
+#pragma once
+#include <utility>
+#include "vica_vcc_controller/core/types.hpp"
+
+namespace vica_vcc_controller::core
+{
+struct PathWindowParams
+{
+  // 가까운 점을 경로를 따라 이 거리 안에서만 찾는다(되돌아오는 구간으로 건너뛰기 방지).
+  // 기본 = local costmap 6 m 의 반폭 = 지금 RPP 와 같은 값.
+  double max_robot_pose_search_dist{3.0};
+  // 점 1개 경로를 거부한다. 기본 꺼짐(동작 불변). run35 도착 yaw 3/8 과 연결 — 켤지는 사용자 결정.
+  bool reject_unit_path{false};
+};
+
+enum class WindowStatus { Ok, EmptyPlan, UnitPath, NoPosesInWindow };
+
+// FeasiblePathHandler(Nav2 Jazzy+) 의 경로 창 부분을 Humble 에서 쓰려고 옮긴 것. ROS 를 모른다.
+class PathWindow
+{
+public:
+  explicit PathWindow(PathWindowParams p = {}) : p_(p) {}
+  void setPlan(Path plan) {plan_ = std::move(plan);}
+  bool empty() const {return plan_.empty();}
+  const Path & plan() const {return plan_;}
+  WindowStatus window(const Pose2D & robot, double max_extent, Path & out);
+
+private:
+  PathWindowParams p_;
+  Path plan_;
+};
+
+Pose2D toRobotFrame(const Pose2D & robot, const Pose2D & p);
+}  // namespace vica_vcc_controller::core
+```
+
+`src/core/path_window.cpp`:
+
+```cpp
+// Copyright (c) 2022 Samsung Research America
+// Copyright (c) 2020 Shrijit Singh
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// VICA 수정(2026-09-28): nav2_controller FeasiblePathHandler(main)와 RPP 1.1.20 transformGlobalPlan 의
+// 가까운 점 찾기·지나온 길 지우기·끝 2점 유지·costmap 범위 자르기를 ROS 메시지 없이 옮겼다.
+// 후진 전환점(inversion)·제자리 회전 지키기(rotation)는 VCC 에서 쓰지 않아 옮기지 않았다.
+
+#include "vica_vcc_controller/core/path_window.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
+namespace vica_vcc_controller::core
+{
+namespace
+{
+double dist(const Pose2D & a, const Pose2D & b) {return std::hypot(a.x - b.x, a.y - b.y);}
+
+// nav2_util::geometry_utils::first_after_integrated_distance 와 같은 뜻.
+size_t firstAfterIntegratedDistance(const Path & path, size_t begin, double d)
+{
+  double acc = 0.0;
+  for (size_t i = begin + 1; i < path.size(); ++i) {
+    acc += dist(path[i - 1], path[i]);
+    if (acc > d) {return i;}
+  }
+  return path.size();
+}
+}  // namespace
+
+WindowStatus PathWindow::window(const Pose2D & robot, double max_extent, Path & out)
+{
+  out.clear();
+  if (plan_.empty()) {return WindowStatus::EmptyPlan;}
+  if (p_.reject_unit_path && plan_.size() == 1) {return WindowStatus::UnitPath;}
+
+  const double search = p_.max_robot_pose_search_dist > 0.0 ?
+    p_.max_robot_pose_search_dist : std::numeric_limits<double>::max();
+  const size_t upper = std::max<size_t>(1, firstAfterIntegratedDistance(plan_, 0, search));
+  size_t closest = 0;
+  double best = std::numeric_limits<double>::infinity();
+  for (size_t i = 0; i < upper && i < plan_.size(); ++i) {
+    const double d = dist(robot, plan_[i]);
+    if (d < best) {best = d; closest = i;}
+  }
+  // ① 끝 방향을 계산할 2점을 남긴다(FeasiblePathHandler 와 같음).
+  if (plan_.size() > 1 && closest == plan_.size() - 1) {closest = plan_.size() - 2;}
+
+  for (size_t i = closest; i < plan_.size(); ++i) {
+    if (dist(robot, plan_[i]) > max_extent) {break;}
+    out.push_back(plan_[i]);
+  }
+  plan_.erase(plan_.begin(), plan_.begin() + static_cast<long>(closest));
+  return out.empty() ? WindowStatus::NoPosesInWindow : WindowStatus::Ok;
+}
+
+Pose2D toRobotFrame(const Pose2D & robot, const Pose2D & p)
+{
+  const Point2D q = toChild(robot, Point2D{p.x, p.y});
+  return {q.x, q.y, normalizeAngle(p.yaw - robot.yaw)};
+}
+}  // namespace vica_vcc_controller::core
+```
+
+`CMakeLists.txt`: vcc_core 에 `src/core/path_window.cpp` 를 추가하고, `test_path_window` 를 추가한다.
+
+- [ ] **Step 4: 통과 확인** — Run: `... --ctest-args -R test_path_window` / Expected: 8개 PASS
+- [ ] **Step 5: 커밋** — `git commit -m "feat(vcc): 경로 창 부품 — FeasiblePathHandler 개념(가까운 점 범위·끝 2점 유지·1점 경로 거부 선택)을 Humble 용으로"`
+
+---
+
+### Task 13: Nav2 플러그인 어댑터 (`VccController`)
 
 **Files:**
 - Create: `include/vica_vcc_controller/vcc_controller.hpp`, `src/vcc_controller.cpp`, `vcc_plugins.xml`
@@ -3236,12 +3518,12 @@ Expected: 9개 PASS.
 - Modify: `CMakeLists.txt` (ROS 의존, `.so`, pluginlib export, 시험)
 
 **Interfaces:**
-- Consumes: `VccCore`, `CoreParams`, `ClearanceField`, `UltrasonicChannel`, `rangeToArcPoints`
+- Consumes: `VccCore`, `CoreParams`, `ClearanceField`, `UltrasonicChannel`, `rangeToArcPoints`, `PathWindow`, `PathWindowParams`, `WindowStatus`, `toRobotFrame`
 - Produces:
   - plugin 클래스 `vica_vcc_controller::VccController : public nav2_core::Controller`
   - 발행 토픽 `vcc/state`(std_msgs/String), `vcc/lane_plan`(nav_msgs/Path)
-  - 파라미터 `FollowPath.*` (Task 13 yaml 이 쓴다)
-    - 목록: `desired_linear_vel, lookahead_time, min_lookahead_dist, max_lookahead_dist, transform_tolerance, max_angular_vel, max_angular_accel, max_linear_decel, start_ramp_speed, start_ramp_accel, linear_accel, min_speed, curve_min_radius, curve_decel, preview_dist, slow_clearance, approach_velocity_scaling_dist, min_approach_linear_velocity, lane_max_offset, lane_step, lane_shift_speeds, avoid_horizon, target_clearance, w_clear, w_rail, w_change, switch_margin, switch_persist_cycles, lane_rate, return_clear_time, turn_enter_angle, turn_exit_angle, pivot_start_angle, turn_radii, turn_clearance, turn_angular_vel, pivot_angular_vel, align_angular_vel, motor_lag, align_settle, align_max_attempts, min_state_time, clearance_window, reset_gap, ultrasonic_topics, us_max_age, us_confirm_count, us_confirm_tol, us_arc_points, publish_state`
+  - 파라미터 `FollowPath.*` (Task 14 yaml 이 쓴다)
+    - 목록: `max_robot_pose_search_dist, reject_unit_path, desired_linear_vel, lookahead_time, min_lookahead_dist, max_lookahead_dist, transform_tolerance, max_angular_vel, max_angular_accel, max_linear_decel, start_ramp_speed, start_ramp_accel, linear_accel, min_speed, curve_min_radius, curve_decel, preview_dist, slow_clearance, approach_velocity_scaling_dist, min_approach_linear_velocity, lane_max_offset, lane_step, lane_shift_speeds, avoid_horizon, target_clearance, w_clear, w_rail, w_change, switch_margin, switch_persist_cycles, lane_rate, return_clear_time, turn_enter_angle, turn_exit_angle, pivot_start_angle, turn_radii, turn_clearance, turn_angular_vel, pivot_angular_vel, align_angular_vel, motor_lag, align_settle, align_max_attempts, min_state_time, clearance_window, reset_gap, ultrasonic_topics, us_max_age, us_confirm_count, us_confirm_tol, us_arc_points, publish_state`
 
 스레드(설계서 16 "구독 스레드" 확정):
 
@@ -3389,6 +3671,7 @@ TEST_F(VccPluginTest, StraightPlanProducesForwardCommand)
 #include "sensor_msgs/msg/range.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "tf2_ros/buffer.h"
+#include "vica_vcc_controller/core/path_window.hpp"
 #include "vica_vcc_controller/core/ultrasonic.hpp"
 #include "vica_vcc_controller/core/vcc_core.hpp"
 
@@ -3414,7 +3697,7 @@ public:
   void setSpeedLimit(const double & speed_limit, const bool & percentage) override;
 
 private:
-  nav_msgs::msg::Path transformGlobalPlan(const geometry_msgs::msg::PoseStamped & pose);
+  core::Path windowPlan(const geometry_msgs::msg::PoseStamped & pose, core::Pose2D & goal_robot);
   bool transformPose(
     const std::string & frame, const geometry_msgs::msg::PoseStamped & in,
     geometry_msgs::msg::PoseStamped & out) const;
@@ -3434,7 +3717,8 @@ private:
   core::CoreParams params_;
   core::VccCore core_;
   core::ClearanceField field_;
-  nav_msgs::msg::Path global_plan_;
+  core::PathWindow path_window_;
+  std::string plan_frame_;
   double transform_tolerance_{0.2};
   double base_speed_{0.5};
   double speed_cap_{0.5};
@@ -3478,8 +3762,8 @@ private:
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// VICA 수정(2026-09-24): transformGlobalPlan·transformPose·setSpeedLimit 은
-// nav2_regulated_pure_pursuit_controller 1.1.20 에서 가져왔다. 나머지는 VICA 작성(VCC).
+// VICA 수정(2026-09-24): transformPose·setSpeedLimit 은 nav2_regulated_pure_pursuit_controller 1.1.20
+// 에서 가져왔다. 경로 창은 core/path_window(FeasiblePathHandler 개념)로 뺐다. 나머지는 VICA 작성(VCC).
 
 #include "vica_vcc_controller/vcc_controller.hpp"
 
@@ -3491,14 +3775,12 @@ private:
 
 #include "nav2_core/exceptions.hpp"
 #include "nav2_costmap_2d/cost_values.hpp"
-#include "nav2_util/geometry_utils.hpp"
 #include "nav2_util/node_utils.hpp"
 #include "pluginlib/class_list_macros.hpp"
 #include "tf2/utils.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 using nav2_util::declare_parameter_if_not_declared;
-using nav2_util::geometry_utils::euclidean_distance;
 
 namespace vica_vcc_controller
 {
@@ -3535,6 +3817,11 @@ void VccController::configure(
       node->get_parameter(name_ + "." + n, v);
       return v;
     };
+
+  core::PathWindowParams wp;
+  wp.max_robot_pose_search_dist = dp("max_robot_pose_search_dist", 3.0);
+  wp.reject_unit_path = dp("reject_unit_path", false);
+  path_window_ = core::PathWindow(wp);
 
   core::CoreParams p;
   p.speed.desired = base_speed_ = speed_cap_ = dp("desired_linear_vel", 0.5);
@@ -3643,7 +3930,10 @@ void VccController::deactivate()
 
 void VccController::setPlan(const nav_msgs::msg::Path & path)
 {
-  global_plan_ = path;
+  core::Path plan;
+  for (const auto & ps : path.poses) {plan.push_back(toPose2D(ps.pose));}
+  path_window_.setPlan(std::move(plan));
+  plan_frame_ = path.header.frame_id;
   if (path.poses.empty()) {return;}
   // 새 goal: 경로 끝점이 0.5 m 넘게 옮겨지면 상황·차선·도착 횟수를 초기화한다(설계서 6.2 ⑤).
   const auto & e = path.poses.back().pose.position;
@@ -3678,47 +3968,38 @@ bool VccController::transformPose(
   return false;
 }
 
-// RPP 1.1.20 transformGlobalPlan (global_path_pub_ 발행만 뺐다)
-nav_msgs::msg::Path VccController::transformGlobalPlan(const geometry_msgs::msg::PoseStamped & pose)
+// 경로 창: 로봇 위치를 plan 좌표계로 한 번 바꾸고, 창 계산은 core::PathWindow 에 맡긴다.
+// 2D 라 plan 좌표 -> 로봇 좌표 변환은 로봇 자세 하나로 정확하다(점마다 TF 를 부르지 않는다).
+core::Path VccController::windowPlan(
+  const geometry_msgs::msg::PoseStamped & pose, core::Pose2D & goal_robot)
 {
-  if (global_plan_.poses.empty()) {
+  if (path_window_.empty()) {
     throw nav2_core::PlannerException("Received plan with zero length");
   }
   geometry_msgs::msg::PoseStamped robot_pose;
-  if (!transformPose(global_plan_.header.frame_id, pose, robot_pose)) {
+  if (!transformPose(plan_frame_, pose, robot_pose)) {
     throw nav2_core::PlannerException("Unable to transform robot pose into global plan's frame");
   }
-  const double max_costmap_extent =
+  const core::Pose2D robot = toPose2D(robot_pose.pose);
+  const double max_extent =
     std::max(costmap_->getSizeInMetersX(), costmap_->getSizeInMetersY()) / 2.0;
 
-  auto closest_pose_upper_bound = nav2_util::geometry_utils::first_after_integrated_distance(
-    global_plan_.poses.begin(), global_plan_.poses.end(), max_costmap_extent);
-  auto transformation_begin = nav2_util::geometry_utils::min_by(
-    global_plan_.poses.begin(), closest_pose_upper_bound,
-    [&robot_pose](const geometry_msgs::msg::PoseStamped & ps) {
-      return euclidean_distance(robot_pose, ps);
-    });
-  auto transformation_end = std::find_if(
-    transformation_begin, global_plan_.poses.end(),
-    [&](const auto & p) {return euclidean_distance(p, robot_pose) > max_costmap_extent;});
-
-  nav_msgs::msg::Path transformed;
-  for (auto it = transformation_begin; it != transformation_end; ++it) {
-    geometry_msgs::msg::PoseStamped stamped, out;
-    stamped.header.frame_id = global_plan_.header.frame_id;
-    stamped.header.stamp = robot_pose.header.stamp;
-    stamped.pose = it->pose;
-    transformPose(costmap_ros_->getBaseFrameID(), stamped, out);
-    out.pose.position.z = 0.0;
-    transformed.poses.push_back(out);
+  core::Path window;
+  switch (path_window_.window(robot, max_extent, window)) {
+    case core::WindowStatus::EmptyPlan:
+      throw nav2_core::PlannerException("Received plan with zero length");
+    case core::WindowStatus::UnitPath:
+      throw nav2_core::PlannerException("vcc: plan with length of one (reject_unit_path)");
+    case core::WindowStatus::NoPosesInWindow:
+      throw nav2_core::PlannerException("Resulting plan has 0 poses in it.");
+    case core::WindowStatus::Ok:
+      break;
   }
-  transformed.header.frame_id = costmap_ros_->getBaseFrameID();
-  transformed.header.stamp = robot_pose.header.stamp;
-  global_plan_.poses.erase(begin(global_plan_.poses), transformation_begin);
-  if (transformed.poses.empty()) {
-    throw nav2_core::PlannerException("Resulting plan has 0 poses in it.");
-  }
-  return transformed;
+  core::Path out;
+  out.reserve(window.size());
+  for (const auto & p : window) {out.push_back(core::toRobotFrame(robot, p));}
+  goal_robot = core::toRobotFrame(robot, path_window_.plan().back());
+  return out;
 }
 
 void VccController::fillClearance(const geometry_msgs::msg::PoseStamped & pose)
@@ -3789,13 +4070,8 @@ geometry_msgs::msg::TwistStamped VccController::computeVelocityCommands(
     }
   }
 
-  const nav_msgs::msg::Path transformed = transformGlobalPlan(pose);
-  geometry_msgs::msg::PoseStamped goal_global = global_plan_.poses.back(), goal_robot;
-  goal_global.header.frame_id = global_plan_.header.frame_id;
-  goal_global.header.stamp = pose.header.stamp;
-  if (!transformPose(costmap_ros_->getBaseFrameID(), goal_global, goal_robot)) {
-    throw nav2_core::PlannerException("vcc: unable to transform goal");
-  }
+  core::Pose2D goal_robot;
+  core::Path robot_path = windowPlan(pose, goal_robot);
 
   fillClearance(pose);
   fillUltrasonic(now);
@@ -3803,8 +4079,8 @@ geometry_msgs::msg::TwistStamped VccController::computeVelocityCommands(
   core::CoreInputs in;
   in.now = now;
   in.dt = dt;
-  for (const auto & ps : transformed.poses) {in.path.push_back(toPose2D(ps.pose));}
-  in.goal = toPose2D(goal_robot.pose);
+  in.path = std::move(robot_path);
+  in.goal = goal_robot;
   in.measured = {velocity.linear.x, velocity.angular.z};
   in.xy_tol = xy_tol;
   in.yaw_tol = yaw_tol;
@@ -3827,10 +4103,11 @@ geometry_msgs::msg::TwistStamped VccController::computeVelocityCommands(
     s.data = buf;
     state_pub_->publish(s);
     nav_msgs::msg::Path lp;
-    lp.header = transformed.header;
+    lp.header.frame_id = costmap_ros_->getBaseFrameID();
+    lp.header.stamp = pose.header.stamp;
     for (const auto & q : out.lane_path) {
       geometry_msgs::msg::PoseStamped ps;
-      ps.header = transformed.header;
+      ps.header = lp.header;
       ps.pose.position.x = q.x;
       ps.pose.position.y = q.y;
       ps.pose.orientation.z = std::sin(q.yaw / 2.0);
@@ -3863,7 +4140,7 @@ geometry_msgs::msg::TwistStamped VccController::computeVelocityCommands(
 PLUGINLIB_EXPORT_CLASS(vica_vcc_controller::VccController, nav2_core::Controller)
 ```
 
-`CMakeLists.txt` 전체 교체본(Task 1~12 누적):
+`CMakeLists.txt` 전체 교체본(Task 1~13 누적):
 
 ```cmake
 cmake_minimum_required(VERSION 3.8)
@@ -3901,6 +4178,7 @@ add_library(vcc_core STATIC
   src/core/align_planner.cpp
   src/core/state_machine.cpp
   src/core/vcc_core.cpp
+  src/core/path_window.cpp
 )
 target_include_directories(vcc_core PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -3925,7 +4203,7 @@ install(FILES vcc_plugins.xml DESTINATION share/${PROJECT_NAME})
 if(BUILD_TESTING)
   find_package(ament_cmake_gtest REQUIRED)
   foreach(t geometry clearance pure_pursuit speed_profile output_stage ultrasonic
-      lanes turn_planner align_planner state_machine vcc_core)
+      lanes turn_planner align_planner state_machine vcc_core path_window)
     ament_add_gtest(test_${t} test/test_${t}.cpp)
     target_link_libraries(test_${t} vcc_core)
   endforeach()
@@ -3944,7 +4222,7 @@ ament_export_dependencies(rclcpp rclcpp_lifecycle nav2_core nav2_costmap_2d nav2
 ament_package()
 ```
 
-(`bench_vcc_core.cpp` 는 Task 14 에서 만든다. 이 Task 에서는 `add_executable(bench_vcc_core ...)` 세 줄을 주석으로 두고, Task 14 에서 푼다.)
+(`bench_vcc_core.cpp` 는 Task 15 에서 만든다. 이 Task 에서는 `add_executable(bench_vcc_core ...)` 세 줄을 주석으로 두고, Task 15 에서 푼다.)
 
 - [ ] **Step 4: 빌드·시험**
 
@@ -3967,7 +4245,7 @@ Expected: `vica_vcc_controller` 파일이 있고, grep 결과는 `1` 이다.
 
 ---
 
-### Task 13: 설정 전환 + 초음파 층 끄기 + 계약 시험
+### Task 14: 설정 전환 + 초음파 층 끄기 + 계약 시험
 
 **Files:**
 - Modify: `vica_ros2_ws/src/vica_nav2/config/nav2_params.yaml:383-463` (FollowPath 블록), `:1521-1553` (range 층 4개)
@@ -3976,7 +4254,7 @@ Expected: `vica_vcc_controller` 파일이 있고, grep 결과는 `1` 이다.
 - Modify: `vica_ros2_ws/src/vica_nav2/test/test_planner_contract.py:170-205`
 
 **Interfaces:**
-- Consumes: Task 12 파라미터 이름 전체
+- Consumes: Task 13 파라미터 이름 전체
 - Produces: `FollowPath.plugin == "vica_vcc_controller::VccController"`, `FollowPathRPP` 블록(옛 RPP 그대로)
 
 - [ ] **Step 1: 기존 시험 실패 목록을 기록한다(기존 표류와 구분)**
@@ -4077,6 +4355,9 @@ Expected: FAIL. `test_rpp_is_preserved_for_one_line_rollback` 이 `FollowPathRPP
     # ══════════════════════════════════════════════════════════════════════
     FollowPath:
       plugin: "vica_vcc_controller::VccController"
+      # 경로 창(FeasiblePathHandler 개념, core/path_window). 가까운 점 찾기 범위 = 지금 RPP 와 같은 3.0.
+      max_robot_pose_search_dist: 3.0
+      reject_unit_path: false            # 1점 경로 거부. 켜면 run35 식 '1점 끝 방향 성공'이 '주행 불가'로 바뀐다(사용자 결정 대기)
       desired_linear_vel: 0.5            # RPP 와 같은 물리 상한
       lookahead_time: 2.5                # RPP 값 — run36 직진 최고
       min_lookahead_dist: 0.6            # run39
@@ -4165,7 +4446,7 @@ git commit -m "feat(nav2): FollowPath 를 VCC 로, RPP 는 FollowPathRPP 로 보
 
 ---
 
-### Task 14: 젯슨 계산 시간·전체 빌드 확인·설계서 정정·요구 대조
+### Task 15: 젯슨 계산 시간·전체 빌드 확인·설계서 정정·요구 대조
 
 **Files:**
 - Create: `vica_ros2_ws/src/vica_vcc_controller/test/bench_vcc_core.cpp`
@@ -4258,6 +4539,7 @@ Expected: vica_vcc_controller 시험 전부 PASS.
 2. 4.2 / 9절 거리장 창을 **3×3 m 에서 5×5 m(`clearance_window`)** 로 바꾼다. 근거: 앞 1.5 m + 몸 외접 0.625 m 를 덮으려면 반폭이 2.2 m 필요하다.
 3. 11절 유턴 회전 속도를 **0.5 에서 `turn_angular_vel` 0.45 / `pivot_angular_vel` 0.35** 로 바꾼다. 근거: DWB U턴 실측 0.42~0.47(devlog 09-17 §5.4)과 RPP rotate_to_heading 0.35.
 4. 11절 가중치 칸에 **w_clear 10 / w_rail 1 / w_change 0.5 / margin 0.05, 근거 = test_lanes 시나리오 9개** 를 적는다.
+6. 4.1 패키지 구조에 `core/path_window.hpp` 를 추가하고, 3.2 에 한 줄을 덧붙인다: **"경로 창은 Nav2 Jazzy+ 의 FeasiblePathHandler 개념(가까운 점 범위·끝 2점 유지·1점 경로 거부 선택)을 옮긴 별도 부품이다. 후진 전환점·제자리 회전 지키기는 쓰지 않는다(§11 후진 금지, 호 유턴 요구)."**
 5. 5.1 ⑥ "S자" 를 다음으로 바꾼다. **"옆 이동 속도 일정(≤ lane_rate 0.10 m/s), 차선을 옮기는 동안은 20 cm 가 나오는 가장 빠른 속도(0.3/0.2/0.1)로 달림"**. 근거: smoothstep 은 가운데 옆 속도가 평균의 1.5배라 손잡이 상한을 넘는다. 0.4 m/s 그대로는 0.6 m 옮기는 데 2.4 m 가 들어 1.5 m 앞 물체를 못 비킨다.
 
 - [ ] **Step 5: 요구 1~12 대조(요구 12)**
@@ -4282,6 +4564,7 @@ Expected: vica_vcc_controller 시험 전부 PASS.
 | inflation 분리는 반영 안 함 | yaml diff 에 inflation 변경 0 |
 | 계산량 DWB 이하 | bench p99 |
 | 이름 vcc | 패키지·플러그인 이름 |
+| 경로 처리 분리(FeasiblePathHandler 개념, 09-28 추가) | `core/path_window` + `test_path_window` 8개 |
 
 - [ ] **Step 6: 커밋(두 저장소)**
 
@@ -4291,7 +4574,7 @@ git add src/vica_vcc_controller
 git commit -m "test(vcc): 젯슨 한 주기 bench — p99 <측정값> ms (예산 19.1 ms)"
 cd ~/VICA-smarthandle
 git add docs/superpowers/specs/2026-09-24-vcc-controller-design.md
-git commit -m "docs(nav2): VCC 설계서 구현 반영 — 유턴 판정에 레일 방향 추가·거리장 5 m·회전 0.45/0.35·가중치 근거·옮기는 동안 감속"
+git commit -m "docs(nav2): VCC 설계서 구현 반영 — 유턴 판정에 레일 방향 추가·거리장 5 m·회전 0.45/0.35·가중치 근거·옮기는 동안 감속·경로 창 분리"
 ```
 
 - [ ] **Step 7: 사용자에게 넘길 것(이 계획의 끝)**
