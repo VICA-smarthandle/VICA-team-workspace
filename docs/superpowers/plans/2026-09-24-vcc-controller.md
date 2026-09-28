@@ -1666,14 +1666,16 @@ TEST(Lanes, PoleOnRailIsPassedWithTwentyCentimetres)
 
 TEST(Lanes, SwitchWaitsForPersistence)
 {
+  // 레일 차선이 '막히지는 않고 20 cm 가 모자란' 경우에만 줏대 규칙이 걸린다(막히면 즉시 옮긴다).
+  // 물체를 레일 왼쪽 0.3~0.4 m 에 둔다: 레일 차선 여유 0.025 m -> 오른쪽 -0.2 차선이 가장 낫다.
   World w;
-  w.box(1.5, 1.6, -0.05, 0.05);
+  w.box(1.5, 1.6, 0.3, 0.4);
   LaneSelector ls;
   double now = 0.0;
   run(ls, w, 2, now);
   EXPECT_NEAR(ls.target(), 0.0, 1e-9);   // 0.2 s 로는 아직
   run(ls, w, 1, now);
-  EXPECT_NE(ls.target(), 0.0);           // 3주기(0.3 s)에 전환
+  EXPECT_NEAR(ls.target(), -0.2, 1e-9);  // 3주기(0.3 s)에 전환
 }
 
 TEST(Lanes, OffsetMovesAtLaneRate)
@@ -1763,6 +1765,7 @@ TEST(Lanes, TieGoesRight)
 
 ```cpp
 #pragma once
+#include <cmath>
 #include <vector>
 #include "vica_vcc_controller/core/clearance.hpp"
 #include "vica_vcc_controller/core/types.hpp"
