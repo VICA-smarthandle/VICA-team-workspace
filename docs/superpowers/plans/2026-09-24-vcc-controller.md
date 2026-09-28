@@ -2227,11 +2227,17 @@ Twist2D turnCommand(const TurnPlan & t, const TurnParams & p)
     - `void reset()`
     - `double update(double yaw_error, double measured_w, double tol, double now, double dt)`
     - `AlignPhase phase() const`, `int attempts() const`, `double lagEstimate() const`
+    - `void setStoppedVelocity(double w)`: 정지 기준을 goal checker 의 `rot_stopped_velocity` 와 맞춘다(Task 11·13 이 매 주기 넣는다)
 
 근거:
 
 - 2026-09-24 이 계획을 쓸 때 파이썬으로 모사했다. 지연 모터(0.3/0.35/0.5 s 순수 지연 + 각가속 2.0)에서 20·45·90·145·−100·180° 가 모두 **1회에 오차 ≤ 5.4°** 였다.
 - 시험은 같은 모형을 C++ 로 옮긴다.
+- 2026-09-28 추가 모사(같은 모형):
+  - 추정 지연 0 에서 시작하고 실제 지연 0.5 s, 허용오차 0.1 rad 이면 → 첫 회 넘침 후 **2회째에 도착**한다.
+  - 180° 를 3회까지 보정(허용오차 0.001 로 강제)하면 지연 0.5 s 에서 **12.9 s** 가 걸린다.
+    진행 감시(SimpleProgressChecker `movement_time_allowance` 20 s) 안이다.
+  - 처음 계획의 "지연 1.0 s" 시험은 모사에서 3회 모두 실패했다. 1.0 s 는 실측 범위(0.3~0.5 s) 밖이라 빼고, 위 두 시험으로 바꿨다.
 
 - [ ] **Step 1: 실패하는 시험** — `test/test_align_planner.cpp`
 
@@ -2246,7 +2252,7 @@ using namespace vica_vcc_controller::core;
 
 namespace
 {
-struct Result { AlignPhase phase; int attempts; double final_err; };
+struct Result { AlignPhase phase; int attempts; double final_err; double seconds; };
 
 // 모터 모형: 명령이 delay 만큼 늦게 도착하고, 각가속 2.0 rad/s^2 로 따라간다(run41 지연 0.3~0.5 s).
 Result simulate(double err0, double delay, double tol = 0.25, AlignParams ap = {})
@@ -2264,10 +2270,10 @@ Result simulate(double err0, double delay, double tol = 0.25, AlignParams ap = {
     w_act += std::clamp(c - w_act, -2.0 * dt, 2.0 * dt);
     yaw += w_act * dt;
     if ((a.phase() == AlignPhase::Done || a.phase() == AlignPhase::Failed) && std::abs(w_act) < 1e-3) {
-      break;
+      return {a.phase(), a.attempts(), err0 - yaw, t};
     }
   }
-  return {a.phase(), a.attempts(), err0 - yaw};
+  return {a.phase(), a.attempts(), err0 - yaw, 60.0};
 }
 }  // namespace
 
@@ -2291,14 +2297,39 @@ TEST(AlignPlanner, AlreadyAlignedDoesNothing)
   EXPECT_EQ(a.attempts(), 0);
 }
 
-TEST(AlignPlanner, LearnsLagAndCorrectsWithinThreeAttempts)
+TEST(AlignPlanner, LearnsLagAndCorrectsOnSecondAttempt)
 {
-  // 지연 1.0 s 인데 추정은 0.35 -> 첫 회 넘침. 두 번째부터 배운 값으로 끊는다.
+  // 추정 지연 0(틀림), 실제 0.5 s, 허용오차 0.1 rad -> 첫 회 넘침, 배운 지연으로 2회째에 맞춘다.
   AlignParams ap;
-  const Result r = simulate(M_PI / 2, 1.0, 0.25, ap);
+  ap.motor_lag = 0.0;
+  const Result r = simulate(M_PI / 2, 0.5, 0.1, ap);
   EXPECT_EQ(r.phase, AlignPhase::Done);
-  EXPECT_LE(r.attempts, 3);
-  EXPECT_LE(std::abs(r.final_err), 0.25);
+  EXPECT_EQ(r.attempts, 2);
+  EXPECT_LE(std::abs(r.final_err), 0.1);
+}
+
+TEST(AlignPlanner, WorstCaseFinishesInsideProgressCheckerWindow)
+{
+  // 진행 감시(SimpleProgressChecker movement_time_allowance 20 s)는 제자리 회전을 진행으로 세지 않는다.
+  // 180도 + 보정 3회를 다 써도 그 안에 끝나야 한다. 도착 직전 감속 시간을 위해 5 s 를 남긴다.
+  const Result r = simulate(M_PI, 0.5, 0.001);
+  EXPECT_EQ(r.phase, AlignPhase::Failed);
+  EXPECT_EQ(r.attempts, 3);
+  EXPECT_LE(r.seconds, 15.0);
+}
+
+TEST(AlignPlanner, StoppedVelocityFollowsGoalChecker)
+{
+  // 정지 기준이 0.2 로 느슨하면, 0.1 rad/s 로 도는 중에도 '멈췄다'로 보고 확인 단계로 넘어간다.
+  AlignPlanner a;
+  a.setStoppedVelocity(0.2);
+  EXPECT_GT(a.update(1.0, 0.0, 0.25, 0.0, 0.1), 0.0);   // 회전 시작
+  // 이미 끊는 지점이면 Settling 으로 간다
+  a.update(0.01, 0.1, 0.25, 0.1, 0.1);
+  ASSERT_EQ(a.phase(), AlignPhase::Settling);
+  a.update(0.01, 0.1, 0.25, 0.2, 0.1);
+  a.update(0.01, 0.1, 0.25, 0.6, 0.1);
+  EXPECT_EQ(a.phase(), AlignPhase::Done);      // 0.1 < 0.2 라 정지로 인정
 }
 
 TEST(AlignPlanner, FailsAfterMaxAttempts)
@@ -2325,7 +2356,7 @@ struct AlignParams
   double alpha{1.2};       // RPP max_angular_accel
   double motor_lag{0.35};  // run41 모터 지연 0.3~0.5 s 에서 고름 [추정] — 회차마다 갱신
   double settle{0.3};
-  double stopped_w{0.05};  // goal checker rot_stopped_velocity
+  double stopped_w{0.05};  // 기본값. 실제로는 매 주기 goal checker 의 rot_stopped_velocity 로 덮는다
   int max_attempts{3};     // 사용자 결정 2026-09-24
   double lag_min{0.0};
   double lag_max{1.0};
@@ -2344,6 +2375,8 @@ public:
   AlignPhase phase() const {return phase_;}
   int attempts() const {return attempts_;}
   double lagEstimate() const {return lag_;}
+  // goal checker 의 rot_stopped_velocity 와 같은 값을 쓴다(두 곳에 따로 적지 않는다).
+  void setStoppedVelocity(double w) {if (w > 0.0) {p_.stopped_w = w;}}
 
 private:
   void begin(double err);
@@ -2442,11 +2475,11 @@ double AlignPlanner::update(double err, double measured_w, double tol, double no
 
 - [ ] **Step 4: 통과 확인**
 
-Expected: 4개 PASS.
+Expected: 6개 PASS.
 - `OneShotForTypicalErrorsAndLags` 가 실패하면 먼저 시험 모형이 계획서 근거의 파이썬 모사와 같은지 확인한다(지연 큐 길이, 각가속 2.0).
 - 그다음에 `motor_lag` 을 본다. 값을 고쳐 억지로 맞추지 않는다.
 
-- [ ] **Step 5: 커밋** — `git commit -m "feat(vcc): 도착 정렬 — 남은 각 한 번 회전, 모터 지연만큼 일찍 끊고 넘침으로 지연 학습, 최대 3회"`
+- [ ] **Step 5: 커밋** — `git commit -m "feat(vcc): 도착 정렬 — 남은 각 한 번 회전, 모터 지연만큼 일찍 끊고 넘침으로 지연 학습, 최대 3회, 최악 15 s 안(진행 감시 20 s)"`
 
 ---
 
@@ -2818,7 +2851,8 @@ State StateMachine::update(const StateInputs & in)
 - Produces:
   - `struct CoreParams{Polygon footprint; LookaheadParams lookahead; SpeedParams speed; OutputParams output; LaneParams lane; TurnParams turn; AlignParams align; StateParams state; double stop_latency=0.3, stop_margin=0.05, stationary_speed=0.05, stationary_time=0.5;}`
   - `enum class Failure{None, CollisionAhead, Blocked, AlignFailed}`
-  - `struct CoreInputs{double now, dt; Path path; Pose2D goal; Twist2D measured; double xy_tol, yaw_tol, speed_cap; ClearanceFn clearance;}`
+  - `struct CoreInputs{double now, dt; Path path; Pose2D goal; Twist2D measured; double xy_tol, yaw_tol, rot_stopped, speed_cap; ClearanceFn clearance;}`
+    - xy_tol·yaw_tol·rot_stopped 는 모두 goal checker 에서 매 주기 받은 값이다.
     - path·goal 은 로봇 좌표계다.
   - `struct CoreOutput{Twist2D cmd; State state; double offset, target; bool lanes_blocked; TurnMode turn_mode; int align_attempts; Failure failure; const char* reason; Path lane_path;}`
   - `class VccCore{ void configure(const CoreParams&); void reset(); CoreOutput step(const CoreInputs&); }`
@@ -3041,6 +3075,7 @@ struct CoreInputs
   Twist2D measured;
   double xy_tol{0.25};
   double yaw_tol{0.25};
+  double rot_stopped{0.05};      // goal checker rot_stopped_velocity
   double speed_cap{0.5};
   ClearanceFn clearance;         // 로봇 좌표계 자세 -> 여유
 };
@@ -3186,6 +3221,7 @@ CoreOutput VccCore::step(const CoreInputs & in)
       if (turn_.mode == TurnMode::Arc) {d.radius = turn_.radius;}
       break;
     case State::Align:
+      align_.setStoppedVelocity(in.rot_stopped);
       d.cmd = {0.0, align_.update(yaw_err, in.measured.w, in.yaw_tol, in.now, in.dt)};
       break;
     case State::Hold:
@@ -4060,13 +4096,17 @@ geometry_msgs::msg::TwistStamped VccController::computeVelocityCommands(
   if (last_compute_ >= 0.0 && now - last_compute_ > reset_gap_) {core_.reset();}
   last_compute_ = now;
 
-  double xy_tol = 0.25, yaw_tol = 0.25;
+  // 도착 허용오차와 정지 기준은 goal checker(StoppedGoalChecker)가 정본이다. VCC 는 매 주기 받아 쓴다.
+  // Humble StoppedGoalChecker::getTolerances 는 vel_tolerance.angular.z 에 rot_stopped_velocity 를 넣는다.
+  // (SimpleGoalChecker 는 그 칸을 음수 최솟값으로 채우므로 양수일 때만 쓴다.)
+  double xy_tol = 0.25, yaw_tol = 0.25, rot_stopped = 0.05;
   if (goal_checker) {
     geometry_msgs::msg::Pose pt;
     geometry_msgs::msg::Twist vt;
     if (goal_checker->getTolerances(pt, vt)) {
       xy_tol = pt.position.x;
       yaw_tol = tf2::getYaw(pt.orientation);
+      if (vt.angular.z > 0.0) {rot_stopped = vt.angular.z;}
     }
   }
 
@@ -4084,6 +4124,7 @@ geometry_msgs::msg::TwistStamped VccController::computeVelocityCommands(
   in.measured = {velocity.linear.x, velocity.angular.z};
   in.xy_tol = xy_tol;
   in.yaw_tol = yaw_tol;
+  in.rot_stopped = rot_stopped;
   in.speed_cap = speed_cap_;
   const core::Pose2D robot = toPose2D(pose.pose);   // costmap 전역 좌표계
   in.clearance = [this, robot](const core::Pose2D & p) {
@@ -4539,6 +4580,7 @@ Expected: vica_vcc_controller 시험 전부 PASS.
 2. 4.2 / 9절 거리장 창을 **3×3 m 에서 5×5 m(`clearance_window`)** 로 바꾼다. 근거: 앞 1.5 m + 몸 외접 0.625 m 를 덮으려면 반폭이 2.2 m 필요하다.
 3. 11절 유턴 회전 속도를 **0.5 에서 `turn_angular_vel` 0.45 / `pivot_angular_vel` 0.35** 로 바꾼다. 근거: DWB U턴 실측 0.42~0.47(devlog 09-17 §5.4)과 RPP rotate_to_heading 0.35.
 4. 11절 가중치 칸에 **w_clear 10 / w_rail 1 / w_change 0.5 / margin 0.05, 근거 = test_lanes 시나리오 9개** 를 적는다.
+7. 5.3 도착 정렬에 한 줄을 덧붙인다: **"정지 기준(0.05 rad/s)은 goal checker 의 rot_stopped_velocity 를 매 주기 받아 쓴다. 최악(180° + 보정 3회)도 15 s 안에 끝나 SimpleProgressChecker 20 s 안이다. goal/progress checker 는 컨트롤러 밖 부품이라 VCC 에 넣지 않고, Humble 에 없는 Axis·AdaptiveTolerance 는 쓰지 않는다(Humble GoalChecker 에 경로 인자가 없어 핵심 기능을 옮길 수 없다)."**
 6. 4.1 패키지 구조에 `core/path_window.hpp` 를 추가하고, 3.2 에 한 줄을 덧붙인다: **"경로 창은 Nav2 Jazzy+ 의 FeasiblePathHandler 개념(가까운 점 범위·끝 2점 유지·1점 경로 거부 선택)을 옮긴 별도 부품이다. 후진 전환점·제자리 회전 지키기는 쓰지 않는다(§11 후진 금지, 호 유턴 요구)."**
 5. 5.1 ⑥ "S자" 를 다음으로 바꾼다. **"옆 이동 속도 일정(≤ lane_rate 0.10 m/s), 차선을 옮기는 동안은 20 cm 가 나오는 가장 빠른 속도(0.3/0.2/0.1)로 달림"**. 근거: smoothstep 은 가운데 옆 속도가 평균의 1.5배라 손잡이 상한을 넘는다. 0.4 m/s 그대로는 0.6 m 옮기는 데 2.4 m 가 들어 1.5 m 앞 물체를 못 비킨다.
 
@@ -4565,6 +4607,7 @@ Expected: vica_vcc_controller 시험 전부 PASS.
 | 계산량 DWB 이하 | bench p99 |
 | 이름 vcc | 패키지·플러그인 이름 |
 | 경로 처리 분리(FeasiblePathHandler 개념, 09-28 추가) | `core/path_window` + `test_path_window` 8개 |
+| goal/progress checker 정합(09-28 추가) | 정지 기준을 goal checker 에서 받음(Task 13 `rot_stopped`), `test_align_planner WorstCaseFinishesInsideProgressCheckerWindow`, `StoppedVelocityFollowsGoalChecker` |
 
 - [ ] **Step 6: 커밋(두 저장소)**
 
