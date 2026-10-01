@@ -112,6 +112,13 @@ SPECK_MAX_PX = 40      # 0.1 m2. 이보다 큰 회색 덩어리는 '못 본 구�
 #   어차피 안 탄다. 등뼈는 복도 한가운데를 지키고 마지막 접근만 planner 가 그린다.
 #   BT 의 handoff_dist_to_goal 을 바꾸면 여기도 맞출 것.
 STUB_M = 2.00
+# 갈림길 호 엣지 벌점. 2026-09-28 설계서 1부(docs/superpowers/specs/2026-09-28-app-route-editor-design.md).
+#   Y 호의 첫 노드가 큰길에서 0.05 m 라, 갈림길 옆을 직진하는 로봇의 '가장 가까운 노드'가 호
+#   위 노드가 되고 route_server 가 호로 내려갔다 올라오는 V자 경로를 뽑았다(run40~46 직진
+#   6회 중 4회). 호 엣지에만 penalty 를 달면 route_server PenaltyScorer 가 비용에 더해 직진
+#   때는 V자가 지고, 곁가지로 꺾을 때는 모든 후보가 같은 호를 지나 순위가 그대로다.
+#   V자는 호 엣지 8개라 0.02 만 넘으면 지고, 0.1 은 5배 여유. 일반 코너 호에는 달지 않는다.
+JUNCTION_PENALTY = 0.1
 
 
 def load_map(name):
@@ -560,9 +567,12 @@ def build_tree(entries, drivable, clearance, meta, shape, res):
         node_chains.append(merge_chain(pts, meta, shape))
     # 접점을 Y 자로 (등뼈 양쪽 호). 사슬 번호는 위 순서 그대로다.
     sharp = 0
+    arc_chain_ids = set()                   # 갈림길 호 사슬 번호 — 여기서 나온 엣지에 벌점
     for j_px, spur_i in spurs:
+        before = len(node_chains)
         if not fillet_junction(node_chains, j_px, spur_i, drivable, meta, shape):
             sharp += 1
+        arc_chain_ids.update(range(before, len(node_chains)))
     if sharp:
         print(f'  [!] 호를 놓지 못한 접점 {sharp}개 — 뾰족한 채 둔다')
     # 사슬 안쪽 코너 둥글리기 -> 1 m 쪼개기
@@ -581,7 +591,10 @@ def build_tree(entries, drivable, clearance, meta, shape, res):
             nodes.append(nd)
     edges = [(ch[i], ch[i + 1]) for ch in node_chains for i in range(len(ch) - 1)
              if ch[i] is not ch[i + 1]]
-    return nodes, edges
+    penalized = {frozenset((ch[i]['id'], ch[i + 1]['id']))
+                 for k, ch in enumerate(node_chains) if k in arc_chain_ids
+                 for i in range(len(ch) - 1) if ch[i] is not ch[i + 1]}
+    return nodes, edges, penalized
 
 
 def build(name, loop_only, tree=False):
@@ -630,7 +643,8 @@ def build(name, loop_only, tree=False):
             return None
     else:
         built = build_loop(entries, drivable, clearance, meta, img.shape, res, loop_only)
-    nodes, edges = built
+        built = (*built, set())             # 고리형엔 갈림길이 없다
+    nodes, edges, penalized = built
 
     print('  레일 진입점')
     for e in entries:
@@ -642,7 +656,8 @@ def build(name, loop_only, tree=False):
 
     for nd in nodes:
         nd['can_turn'] = bool(turnable[nd['px'][0], nd['px'][1]])
-    return {'nodes': nodes, 'edges': edges, 'entries': entries, 'turnable': turnable,
+    return {'nodes': nodes, 'edges': edges, 'penalized': penalized,
+            'entries': entries, 'turnable': turnable,
             'drivable': drivable,
             'free': free, 'clearance': clearance, 'meta': meta,
             'img': img, 'inner': inner, 'outer': outer, 'res': res, 'tree': tree}
@@ -658,10 +673,14 @@ def write_geojson(g, out):
                                                    round(nd['xy'][1], 4)]}})
     eid = 1000
     for nd, nb in g['edges']:
+        pen = frozenset((nd['id'], nb['id'])) in g.get('penalized', set())
         for a, b in ((nd, nb), (nb, nd)):   # 양방향
             eid += 1
+            props = {'id': eid, 'startid': a['id'], 'endid': b['id']}
+            if pen:
+                props['metadata'] = {'penalty': JUNCTION_PENALTY}
             feats.append({'type': 'Feature',
-                          'properties': {'id': eid, 'startid': a['id'], 'endid': b['id']},
+                          'properties': props,
                           'geometry': {'type': 'MultiLineString',
                                        'coordinates': [[[round(a['xy'][0], 4), round(a['xy'][1], 4)],
                                                         [round(b['xy'][0], 4), round(b['xy'][1], 4)]]]}})
@@ -764,6 +783,7 @@ def main():
     if g.get('tree'):
         junctions = sum(1 for v in adj.values() if len(v) >= 3)
         print(f'  접점(엣지 3개 이상) {junctions}개 · 고리 수 {len(g["edges"]) - n + 1}개(Y 접점마다 1개가 정상)')
+        print(f'  갈림길 호 벌점 엣지 {len(g.get("penalized", ()))}개(penalty {JUNCTION_PENALTY})')
     print(f'  {gj}')
     print(f'  {png}')
     return 0

@@ -320,9 +320,14 @@ def build_terms() -> dict[str, Term]:
                 "지도는 위에 찍힌 '현재 지도'다. 바꾸려면 터미네이터를 다 닫고",
                 "VICA_MAP_ID 를 export 한 뒤 새로 띄운다. 이 칸에서만 고치면 mission·",
                 "app·initpose 는 옛 지도를 계속 보고, Nav2 는 아무 불평 없이 돈다.",
+                "",
+                "use_route:=true — 레일(Route Server)로 달린다(2026-10-01 기본). 레일 파일",
+                "<지도>_route.geojson 이 없는 지도는 launch 가 알아서 레일 없이 띄운다.",
+                "레일 없이 비교 주행할 때만 지우고 실행한다.",
             ),
             command=(
-                "ros2 launch vica_nav2 nav2_map_test.launch.py map:=$VICA_MAP_YAML"
+                "ros2 launch vica_nav2 nav2_map_test.launch.py"
+                " map:=$VICA_MAP_YAML use_route:=true"
             ),
             mode=HOLD,
             uses_map=True,
