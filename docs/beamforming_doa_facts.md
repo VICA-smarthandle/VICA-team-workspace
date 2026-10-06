@@ -23,7 +23,7 @@
 | 채널 | 6ch — ch0 처리음(AEC·잡음억제·빔포밍 완료) / ch1~4 원음 / ch5 재생참조 |
 | DOA 읽기 | `DspState.doa_angle()` — USB vendor control transfer, 파라미터 id21 `DOAANGLE`, **0~359 정수** |
 | 권한 | `/etc/udev/rules.d/99-respeaker.rules`(`MODE=0666`) 적용됨. 읽기 확인 완료 |
-| 쓰기 | **금지(D7 동결).** DOA 는 읽기 전용이라 저촉되지 않는다 |
+| 쓰기 | 칩 DSP 설정은 쓸 수 있다 — 고정 규칙 D7 은 2026-10-06 사용자 결정으로 폐지. 바꾸면 호출·긴급어 인식률을 다시 잰다(vica-voice-llm `src/dsp_state.py` 주석). DOA 는 읽기 전용 값이다 |
 
 ## 3. 빔 방향은 고정할 수 없다
 

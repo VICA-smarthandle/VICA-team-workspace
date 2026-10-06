@@ -486,7 +486,7 @@ def build_terms() -> dict[str, Term]:
                 "  vica_goto.sh cancel   진행 중 주행 취소",
                 "목적지 이름이 한글인데 xfreerdp(RDP)에서 한영 전환이 안 되어",
                 "번호로 고르게 만들었다. 서비스가 받는 것은 UUID라 이름은 표시용이다.",
-                "초기 위치를 먼저 잡아야 승인된다 — 왼쪽 initpose 칸을 본다.",
+                "초기 위치를 먼저 잡아야 승인된다 — 앱의 '초기 위치 잡기'나 RViz 로 넣는다.",
                 "목적지 목록은 현재 지도의 catalog 에서 읽고, 요청에도 그 map_id 를",
                 "실어 보낸다. Mission Manager 쪽 map_id 와 다르면 거부된다.",
             ),
@@ -511,6 +511,30 @@ def build_terms() -> dict[str, Term]:
             command="bash $VICA_ROOT/scripts/vica_set_initial_pose.sh",
             mode=HOLD,
             uses_map=True,
+        ),
+        # 2026-10-06 사용자 요청: vica·vica_drive 에서 initpose 칸 자리를 이 칸이 받는다.
+        # initpose 정의는 위에 그대로 남겨 두었다(다시 넣을 때 columns 에 이름만 적으면 된다).
+        "web": Term(
+            title="web 앱(5000)",
+            note=(
+                "관리자 앱의 웹 빌드(VICA_Supervisor/build/web)를 5000번 포트로 연다.",
+                "같은 망의 브라우저에서 http://<젯슨 IP>:5000 으로 접속한다.",
+                "웹 앱은 rosbridge 9090 으로 로봇에 붙으므로 app 칸이 먼저 떠 있어야 한다.",
+                "파일을 내보내기만 하는 서버라 ROS 를 source 하지 않는다. Ctrl+C 로 끈다.",
+                "초기 위치는 이제 앱의 '초기 위치 잡기'나 RViz 2D Pose Estimate 로 넣는다",
+                "(initpose 칸은 2026-10-06 이 칸으로 바뀌었다 — 명령은",
+                " bash $VICA_ROOT/scripts/vica_set_initial_pose.sh 로 shell 칸에서도 된다).",
+            ),
+            command=f"cd {SUPERVISOR}/build/web && python3 -m http.server 5000",
+            mode=HOLD,
+            ros=False,
+            # 웹 빌드가 있는지, 5000번이 이미 열려 있지 않은지(두 번 띄움) 먼저 본다.
+            precheck=(
+                f"ls -l {SUPERVISOR}/build/web/index.html 2>&1 | head -1;"
+                " ss -ltn 2>/dev/null | grep -q ':5000 '"
+                " && echo '[주의] 5000번 포트가 이미 열려 있다 — 다른 칸에서 띄웠는지 본다.'"
+                " || echo '5000번 포트 비어 있음'"
+            ),
         ),
         # 2026-08-28 복원. 앱 세션이 config 직접 편집으로 넣었던 칸이라 재생성 때
         # 지워졌다. rc 원문(t_posecheck.rc 백업)에서 그대로 옮겨 생성기에 정착시킨다.
@@ -628,7 +652,7 @@ def build_terms() -> dict[str, Term]:
             note=(
                 "[무거움] 원격(xrdp)에서 CPU 코어 2개를 쓴다. 주행 중에는 끄는 것이 낫다.",
                 "켜둔 채 주행하면 Nav2 계산이 밀려 '로봇이 느린 것'과 구분되지 않는다.",
-                "초기 위치는 왼쪽 initpose 칸으로 넣을 수 있어 RViz 없이도 주행한다.",
+                "초기 위치는 앱의 '초기 위치 잡기'로도 넣을 수 있어 RViz 없이도 주행한다.",
                 "Fixed Frame이 map이어야 2D Pose Estimate가 AMCL에 닿는다.",
                 "지도 확인이 끝나면 Ctrl+C로 바로 끈다.",
             ),
@@ -730,7 +754,7 @@ PROFILES: dict[str, Profile] = {
             ["power", "can", "display", "lidar", "safety"],
             ["motor", "d455", "imu", "segnet", "nav2", "nvblox"],
             ["mission", "app", "gui", "monitor", "handle", "detector"],
-            ["initpose", "posecheck", "goto", "record", "reset", "rviz", "yolo"],
+            ["web", "posecheck", "goto", "record", "reset", "rviz", "yolo"],
             ["llm", "stt", "check", "teleop", "shell"],
         ],
     ),
@@ -758,7 +782,7 @@ PROFILES: dict[str, Profile] = {
             # vica·vica_sensor 레이아웃에서는 계속 쓴다.
             ["motor", "d455", "imu", "nav2"],
             ["mission", "app", "gui", "monitor", "handle", "detector"],
-            ["initpose", "posecheck", "goto", "record", "reset", "rviz", "yolo"],
+            ["web", "posecheck", "goto", "record", "reset", "rviz", "yolo"],
             ["llm", "stt", "check", "teleop", "shell"],
         ],
     ),
