@@ -2,6 +2,16 @@
 # 지도 저장 + 앱용 png 변환 + 검증을 한 번에 한다.
 #
 #   bash scripts/vica_map_save.sh vica_map_0813
+#   bash scripts/vica_map_save.sh vica_map_0813 --align   바르게 세워 저장
+#
+# 왜 --align 이 있는가(2026-10-07) — Cartographer 는 매핑을 시작한 순간 로봇이 본
+# 방향을 지도의 가로축으로 잡는다. 로봇을 복도와 몇 도 비껴 세우고 시작하면 지도도
+# 그만큼 기울고, 앱의 4방향 장소 방향(정면 90°·우측 0°…)이 복도와 어긋난다.
+# --align 이면 저장 직후 벽 방향을 재서 2° 이상 기울었을 때만 그림을 돌리고 origin 을
+# 다시 잡는다. 원본 pgm 과 각도 메모는 maps/.original/ 에 숨겨 둔다 — yaml·png 를
+# 두지 않아 앱 목록·터미널 고르기·Nav2 어디에도 안 뜬다. 계산은
+# vica_cartographer/map_align.py 가 한다. 옵션이 없으면 예전과 똑같이 저장하고
+# 기울기만 재서 알려 준다.
 #
 # 왜 png 를 따로 만드는가 — map_saver_cli 는 .pgm 과 .yaml 만 만든다. 관리자 앱은
 # VICA_Supervisor/ros2/map_list_node.py 62행이 maps/*.png 를 훑어 목록을 만들므로,
@@ -18,6 +28,12 @@
 # `AMENT_TRACE_SETUP_FILES: unbound variable` 로 즉시 죽는다.
 
 NAME=${1:-}
+ALIGN=""
+case "${2:-}" in
+  --align) ALIGN="--align" ;;
+  "") ;;
+  *) printf "\n\033[31m[중단]\033[0m 둘째 인자는 --align 만 씁니다: '%s'\n" "$2"; exit 1 ;;
+esac
 
 ok()   { printf "  \033[32mOK\033[0m   %s\n" "$1"; }
 bad()  { printf "  \033[31mNG\033[0m   %s\n" "$1"; }
@@ -36,9 +52,10 @@ MAPS="$VICA_ROS_WS/maps"
 # ---------------------------------------------------------------------------
 if [ -z "$NAME" ]; then
   cat <<'USAGE'
-사용법: vica_map_save.sh <지도이름>
+사용법: vica_map_save.sh <지도이름> [--align]
 
   vica_map_save.sh vica_map_0813
+  vica_map_save.sh vica_map_0813 --align    기울었으면(2° 이상) 바르게 세워 저장
 
 지도 이름에는 영문·숫자·밑줄·붙임표만 씁니다. 확장자와 경로는 붙이지 않습니다.
 세 파일(.pgm .png .yaml)이 그 이름으로 maps/ 에 생깁니다.
@@ -160,9 +177,29 @@ ok "pgm·yaml 저장 완료"
 echo
 
 # ---------------------------------------------------------------------------
-# 5. 앱용 png 변환
+# 5. 지도 기울기 — png 를 만들기 전에 해야 png 도 돌린 그림이 된다
 # ---------------------------------------------------------------------------
-echo "--- 4) 앱용 png 변환 ---"
+echo "--- 4) 지도 기울기 ---"
+# 정렬은 덤이다. 실패해도 지도는 이미 저장됐으므로 멈추지 않고, 돌리기 전 그림
+# 그대로 다음 단계로 간다. map_align 은 덮어쓰기 전에 원본부터 숨겨 두고, 돌린
+# 그림은 임시 파일에 쓴 뒤 바꿔 끼운다.
+# VICA_MAP_ALIGN_MIN_DEG 로 문턱을 바꿀 수 있지만, 앱 팝업과 SaveMap.srv 주석의
+# "2° 미만" 문구는 고정이라 바꾸면 화면 안내와 어긋난다. 시험용으로만 쓴다.
+python3 -m vica_cartographer.map_align save "$MAPS" "$NAME" $ALIGN \
+  --min-deg "${VICA_MAP_ALIGN_MIN_DEG:-2.0}"
+if [ $? -ne 0 ]; then
+  warn "기울기 계산을 실행하지 못했다(vica_cartographer 를 빌드했는지 확인). 지도는 그대로 저장됐다."
+  if [ -n "$ALIGN" ]; then
+    # 앱 완료 화면이 결과를 알 수 있게 실패 줄을 대신 낸다(mapping_session.parse_align_result).
+    echo 'VICA_ALIGN {"result": "failed", "tilt_deg": null, "rotated_deg": 0.0, "message": "지도를 돌리지 못해 그대로 저장했습니다."}'
+  fi
+fi
+echo
+
+# ---------------------------------------------------------------------------
+# 6. 앱용 png 변환
+# ---------------------------------------------------------------------------
+echo "--- 5) 앱용 png 변환 ---"
 if ! command -v convert >/dev/null 2>&1; then
   bad "convert(ImageMagick) 가 없습니다"
   die "pgm 과 yaml 은 남았습니다. png 만 따로 만드세요:
@@ -178,9 +215,9 @@ ok "png 생성 완료 — 앱이 읽는 것은 이 파일이다"
 echo
 
 # ---------------------------------------------------------------------------
-# 6. 검증
+# 7. 검증
 # ---------------------------------------------------------------------------
-echo "--- 5) 검증 ---"
+echo "--- 6) 검증 ---"
 for f in "$PGM" "$PNG" "$YAML"; do
   if [ -f "$f" ]; then
     ok "$(basename "$f")  $(stat -c%s "$f") bytes"
@@ -207,9 +244,9 @@ grep -E '^(resolution|origin):' "$YAML" 2>/dev/null | sed 's/^/       /'
 echo
 
 # ---------------------------------------------------------------------------
-# 7. CURRENT_MAP 기록
+# 8. CURRENT_MAP 기록
 # ---------------------------------------------------------------------------
-echo "--- 6) 현재 지도 갱신 ---"
+echo "--- 7) 현재 지도 갱신 ---"
 if printf '%s\n' "$NAME" > "$MAPS/CURRENT_MAP" 2>/dev/null; then
   ok "maps/CURRENT_MAP -> $NAME"
 else
