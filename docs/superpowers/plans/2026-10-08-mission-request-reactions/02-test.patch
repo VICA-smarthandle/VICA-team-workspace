@@ -1,0 +1,704 @@
+diff --git a/src/vica_mission_manager/test/reaction_states.py b/src/vica_mission_manager/test/reaction_states.py
+new file mode 100644
+index 0000000..a639e2a
+--- /dev/null
++++ b/src/vica_mission_manager/test/reaction_states.py
+@@ -0,0 +1,259 @@
++"""미션 요청 반응표(2026-10-08) 시험용 상태 만들기 — 실제 흐름과 같은 공개 함수만 쓴다.
++
++상태마다 새 MissionLogic 을 그 상태로 데려가고 (logic, 다음 시각)을 돌려준다. 필드를 직접
++고치지 않는다 — 실제 흐름이 채우는 내부 값(질문 종류·대기 장소·복귀 사다리 등)이 그대로
++남아야 칸의 동작이 실기와 같다. 정본 설계: docs/superpowers/specs/2026-10-08-mission-request-
++reactions-design.md
++"""
++from vica_mission_manager.mission_logic import (
++    ApproachRequest,
++    Destination,
++    IntentData,
++    MapBounds,
++    MissionLogic,
++    NavStatus,
++    Pose2D,
++    WaitSpot,
++)
++
++BOUNDS = MapBounds(min_x=-50, min_y=-50, max_x=50, max_y=50)
++HOME = Destination(id="__home__", name="홈", pose=Pose2D(0, 0, 0, "map"))
++SPOT = WaitSpot(x=1.97, y=-1.42, yaw_deg=0.0, side="right")
++APPROACH = ApproachRequest(goal=Pose2D(1.0, 0.5, 30.0, "map"), track_id=7)
++
++
++def dest(category="", **kw) -> Destination:
++    d = dict(id="d1", name="화장실", pose=Pose2D(3, 2, 90, "map"), calibrated=True,
++             arrival_message="화장실 앞에 도착했습니다.", category=category)
++    d.update(kw)
++    return Destination(**d)
++
++
++ROOM = dest(id="r409", name="409호", pose=Pose2D(5, 1, 0, "map"), arrival_message="")
++TOILET = dest("restroom", id="wc", pose=Pose2D(-3, 2, 90, "map"))
++SPOT_DEST = dest("restroom", id="d1", wait_spot=SPOT, door_yaw_deg=270.0, name="화장실 입구",
++                 pose=Pose2D(3.21, -1.05, 90.0, "map"),
++                 arrival_message="화장실 입구 앞에 도착했습니다.")
++ELEV = dest(id="elev", name="엘리베이터", pose=Pose2D(6, -2, 0, "map"), arrival_message="")
++ALL = {d.id: d for d in (ROOM, TOILET, SPOT_DEST, ELEV)}
++
++
++def lookup(dest_id: str):
++    return ALL.get(dest_id) if dest_id else None
++
++
++def intent(kind="navigate", **kw) -> IntentData:
++    d = dict(intent=kind, matched_destination_id="", need_confirm=False, safety_flag="normal")
++    d.update(kw)
++    return IntentData(**d)
++
++
++def go(d: Destination) -> IntentData:
++    return intent(matched_destination_id=d.id)
++
++
++def new_logic(**kw) -> MissionLogic:
++    kw.setdefault("return_destination", HOME)
++    kw.setdefault("arrival_dialog", True)
++    return MissionLogic(**kw)
++
++
++# ---- 상태 ------------------------------------------------------------------
++def idle():
++    return new_logic(), 1.0
++
++
++def navigating(d=ROOM, t=0.0):
++    logic = new_logic()
++    logic.on_intent(go(d), d, BOUNDS, True, t)
++    return logic, t + 1.0
++
++
++def asking(d=TOILET):
++    """도착 질문. TOILET(restroom)은 대기형 "다녀오시는 동안 여기서 기다릴까요?"."""
++    logic = new_logic()
++    logic.on_intent(go(d), d, BOUNDS, True, 0.0)
++    logic.on_tick(1.0, NavStatus.SUCCEEDED)
++    logic.on_arrival_question_spoken(2.0)
++    return logic, 3.0
++
++
++def returning(d=TOILET):
++    """도착 질문에 "다 됐어" → 홈 복귀 중(안내를 마친 뒤)."""
++    logic, t = asking(d)
++    logic.on_arrival_answer(intent("finish"), t)
++    return logic, t + 1.0
++
++
++def returning_late():
++    """도착 질문에 끝내 답이 없어 떠난 직후 — 늦은 답이 올 수 있는 복귀."""
++    logic, _ = asking()
++    logic.on_tick(10.5, NavStatus.NONE)          # 8초 침묵 → 같은 질문 한 번 더
++    logic.on_arrival_question_spoken(11.0)
++    logic.on_tick(19.5, NavStatus.NONE)          # 또 침묵 → 떠나기 예고(3초 유예)
++    logic.on_tick(23.0, NavStatus.NONE)          # 유예 끝 → 홈으로
++    return logic, 24.0
++
++
++def idle_braked(d=TOILET):
++    """홈 가다 "비카야"로 세운 뒤 — 15초 재개 사다리가 걸린 IDLE. TOILET 은 대기 장소가 없다."""
++    logic, t = returning(d)
++    logic.on_return_brake(t)
++    return logic, t + 1.0
++
++
++def idle_braked_spot():
++    """대기 장소가 있는 목적지(SPOT_DEST)에서 안내를 마치고 홈 가다 세운 뒤."""
++    return idle_braked(SPOT_DEST)
++
++
++def confirming():
++    logic = new_logic()
++    logic.on_intent(intent(matched_destination_id=TOILET.id, need_confirm=True),
++                    TOILET, BOUNDS, True, 0.0)
++    return logic, 1.0
++
++
++def confirming_change():
++    """안내 주행 중 다른 목적지 제안 → 멈추고 바꿀지 묻는 중."""
++    logic, t = navigating(ROOM)
++    logic.on_intent(intent(matched_destination_id=TOILET.id, need_confirm=True),
++                    TOILET, BOUNDS, True, t)
++    return logic, t + 1.0
++
++
++def paused():
++    logic, t = navigating()
++    logic.on_pause_request(t)
++    return logic, t + 1.0
++
++
++def failed():
++    logic = new_logic(nav_retry_limit=0)
++    logic.on_intent(go(ROOM), ROOM, BOUNDS, True, 0.0)
++    logic.on_tick(10.0, NavStatus.FAILED)
++    return logic, 10.5
++
++
++def arrived():
++    """관리자 주행 도착(질문 없음)."""
++    logic = new_logic()
++    logic.on_app_destination(dest("restroom"), BOUNDS, True, 0.0)
++    logic.on_tick(10.0, NavStatus.SUCCEEDED)
++    return logic, 10.5
++
++
++def asking_wait_time():
++    logic, t = asking(dest("reception", id="desk", name="안내데스크"))
++    logic.on_arrival_answer(intent("affirm"), t)
++    logic.on_arrival_question_spoken(t + 1.0)
++    return logic, t + 2.0
++
++
++def waiting_release(minutes=10):
++    logic = new_logic()
++    logic.on_intent(go(SPOT_DEST), SPOT_DEST, BOUNDS, True, 0.0)
++    logic.on_tick(1.0, NavStatus.SUCCEEDED)
++    logic.on_arrival_question_spoken(2.0)
++    logic.on_arrival_answer(intent("wait", wait_minutes=minutes), 3.0)
++    return logic, 4.0
++
++
++def moving_to_wait_spot():
++    logic, _ = waiting_release()
++    logic.on_wait_speech_spoken(logic._release_text, 7.0)
++    logic.on_tick(7.1, NavStatus.NONE)
++    return logic, 7.5
++
++
++def waiting():
++    logic, _ = moving_to_wait_spot()
++    logic.on_tick(8.0, NavStatus.SUCCEEDED)
++    return logic, 9.0
++
++
++def waiting_asked():
++    """대기 중 "다 됐어" → "네, 어디로 모실까요?"를 물은 직후(30초 안)."""
++    logic, t = waiting()
++    logic.on_intent(intent("finish"), None, BOUNDS, True, t)
++    return logic, t + 1.0
++
++
++def moving_back_to_dest():
++    logic, _ = moving_to_wait_spot()
++    logic.on_tick(40.0, NavStatus.FAILED)
++    return logic, 41.0
++
++
++def approaching():
++    logic = new_logic()
++    logic.on_approach_request(APPROACH, BOUNDS, True, 0.0)
++    return logic, 1.0
++
++
++def awaiting_user():
++    logic, _ = approaching()
++    logic.on_tick(5.0, NavStatus.SUCCEEDED)
++    logic.on_approach_question_spoken(6.0)
++    return logic, 7.0
++
++
++def turning():
++    logic, t = awaiting_user()
++    logic.on_approach_answer(True, t)
++    return logic, t + 1.0
++
++
++def seeking():
++    logic = new_logic(wake_doa_sign=1.0)
++    logic.on_wake_doa(90.0, True, 1.0)
++    return logic, 2.0
++
++
++def estopped():
++    logic, t = navigating()
++    logic.on_estop(True, t)
++    return logic, t + 1.0
++
++
++# 반응표의 행. 상태 이름 정본은 State 다 — 같은 상태의 갈래(세운 뒤·바꾸기 질문·늦은 답)는
++# 반응표 칸의 쪽지에 적힌 경우를 따로 세운 것이다.
++ROWS = {
++    "IDLE": idle,
++    "IDLE_BRAKED": idle_braked,
++    "IDLE_BRAKED_SPOT": idle_braked_spot,
++    "CONFIRMING": confirming,
++    "CONFIRMING_CHANGE": confirming_change,
++    "NAVIGATING": navigating,
++    "PAUSED": paused,
++    "FAILED": failed,
++    "ARRIVED": arrived,
++    "ASKING_NEXT": asking,
++    "ASKING_WAIT_TIME": asking_wait_time,
++    "WAITING_RELEASE": waiting_release,
++    "MOVING_TO_WAIT_SPOT": moving_to_wait_spot,
++    "WAITING": waiting,
++    "WAITING_ASKED": waiting_asked,
++    "MOVING_BACK_TO_DEST": moving_back_to_dest,
++    "APPROACHING": approaching,
++    "AWAITING_USER": awaiting_user,
++    "TURNING": turning,
++    "SEEKING": seeking,
++    "RETURNING": returning,
++    "RETURNING_LATE": returning_late,
++    "ESTOPPED": estopped,
++}
++
++# 반응표의 열 — 음성 요청 11종. 목적지 요청은 지금 가는 곳과 다른 엘리베이터로 한다.
++REQUESTS = {
++    "navp": intent(matched_destination_id=ELEV.id, need_confirm=True),
++    "navc": intent(matched_destination_id=ELEV.id),
++    "wait": intent("wait", wait_minutes=-1),
++    "finish": intent("finish"),
++    "cancel": intent("cancel"),
++    "pause": intent("pause"),
++    "resume": intent("resume"),
++    "yes": intent("affirm"),
++    "no": intent("deny"),
++    "talk": intent("question"),
++}
+diff --git a/src/vica_mission_manager/test/test_reaction_table.py b/src/vica_mission_manager/test/test_reaction_table.py
+new file mode 100644
+index 0000000..56bf793
+--- /dev/null
++++ b/src/vica_mission_manager/test/test_reaction_table.py
+@@ -0,0 +1,433 @@
++"""미션 요청 반응표 전수 시험 (2026-10-08, 규칙 1·2·결정 5개·다시 묻기).
++
++상태(행) × 음성 요청(열)마다 미션이 하는 말과 바뀐 상태를 못 박는다. 정본 설계:
++docs/superpowers/specs/2026-10-08-mission-request-reactions-design.md, 정본 페이지 v3.
++"비카야" 열은 test_wake_reaction.py 가 맡는다. 질문·잡담(talk)은 LLM 이 답하고 미션은
++말하지 않는다 — 그 칸의 규칙 2는 음성 저장소 시험이 맡는다.
++
++PENDING 의 칸은 아직 구현 전이다(strict xfail). 작업마다 자기 칸을 지운다.
++"""
++import pytest
++
++from reaction_states import BOUNDS, REQUESTS, ROWS, lookup
++from vica_mission_manager.mission_logic import (
++    MSG_APPROACH_ACCEPTED,
++    MSG_APPROACH_BUSY,
++    MSG_APPROACH_DECLINED,
++    MSG_ARRIVAL_RETRY,
++    MSG_ASK_ENTRANCE,
++    MSG_ASK_WAIT_TIME,
++    MSG_CANCEL_CONFIRM,
++    MSG_CONFIRM_PROMPT_FALLBACK,
++    MSG_CONFIRM_TIMEOUT,
++    MSG_ESTOP_REJECT,
++    MSG_FINISH,
++    MSG_NOT_NAVIGATING,
++    MSG_NOT_PAUSED,
++    MSG_PAUSED,
++    MSG_RESUMED,
++    MSG_START,
++    MSG_WAIT_DEFAULT,
++    MSG_WAIT_FINISH_ASK,
++    MSG_WAIT_SPOT_CONFIRM,
++    MSG_WAIT_SPOT_DEFAULT,
++    MSG_WAKE_GREETING,
++    Say,
++    State,
++    say_destination,
++)
++
++START_ELEV = say_destination(MSG_START, "엘리베이터")
++START_TOILET = say_destination(MSG_START, "화장실")
++RESUMED_ROOM = say_destination(MSG_RESUMED, "409호")
++ASK_ELEV = say_destination(MSG_CONFIRM_PROMPT_FALLBACK, "엘리베이터")
++ASK_TOILET = say_destination(MSG_CONFIRM_PROMPT_FALLBACK, "화장실")
++M2P_FRONT = MSG_WAIT_SPOT_DEFAULT.format(place="입구 앞")
++M2P_RIGHT = MSG_WAIT_SPOT_DEFAULT.format(place="입구 오른쪽")
++M2_RIGHT_10 = MSG_WAIT_SPOT_CONFIRM.format(minutes=10, place="입구 오른쪽")
++# 새 문장(설계 7절). 상수는 해당 작업이 만든다 — 여기서는 글자 그대로 못 박는다.
++SWITCH_ELEV = "네, 엘리베이터로 안내해드릴까요?"
++GOING_ROOM = "지금 409호로 가는 중이에요."
++NEED_ASK = "안내가 필요 없으신가요?"
++
++COLS = ("navp", "navc", "wait", "finish", "cancel", "pause", "resume", "yes", "no", "talk")
++
++EXPECT = {
++    "IDLE": {
++        "navp": ((), State.CONFIRMING),
++        "navc": ((START_ELEV,), State.NAVIGATING),
++        "wait": ((MSG_NOT_NAVIGATING,), State.IDLE),
++        "finish": ((MSG_NOT_NAVIGATING,), State.IDLE),
++        "cancel": ((MSG_NOT_NAVIGATING,), State.IDLE),
++        "pause": ((MSG_NOT_NAVIGATING,), State.IDLE),
++        "resume": ((MSG_NOT_PAUSED,), State.IDLE),
++        "yes": ((), State.IDLE),
++        "no": ((), State.IDLE),
++        "talk": ((), State.IDLE),
++    },
++    "IDLE_BRAKED": {
++        "navp": ((), State.CONFIRMING),
++        "navc": ((START_ELEV,), State.NAVIGATING),
++        "wait": ((M2P_FRONT,), State.MOVING_BACK_TO_DEST),
++        "finish": ((MSG_FINISH,), State.RETURNING),
++        "cancel": ((MSG_NOT_NAVIGATING,), State.IDLE),
++        "pause": ((MSG_NOT_NAVIGATING,), State.IDLE),
++        "resume": ((MSG_FINISH,), State.RETURNING),
++        "yes": ((), State.IDLE),
++        "no": ((), State.IDLE),
++        "talk": ((), State.IDLE),
++    },
++    "IDLE_BRAKED_SPOT": {
++        "navp": ((), State.CONFIRMING),
++        "navc": ((START_ELEV,), State.NAVIGATING),
++        "wait": ((M2P_RIGHT,), State.WAITING_RELEASE),
++        "finish": ((MSG_FINISH,), State.RETURNING),
++        "cancel": ((MSG_NOT_NAVIGATING,), State.IDLE),
++        "pause": ((MSG_NOT_NAVIGATING,), State.IDLE),
++        "resume": ((MSG_FINISH,), State.RETURNING),
++        "yes": ((), State.IDLE),
++        "no": ((), State.IDLE),
++        "talk": ((), State.IDLE),
++    },
++    "CONFIRMING": {
++        "navp": ((), State.CONFIRMING),
++        "navc": ((SWITCH_ELEV,), State.CONFIRMING),
++        "wait": ((MSG_CONFIRM_TIMEOUT,), State.IDLE),
++        "finish": ((MSG_CONFIRM_TIMEOUT,), State.IDLE),
++        "cancel": ((MSG_CONFIRM_TIMEOUT,), State.IDLE),
++        "pause": ((MSG_WAKE_GREETING,), State.CONFIRMING),
++        "resume": ((ASK_TOILET,), State.CONFIRMING),
++        "yes": ((START_TOILET,), State.NAVIGATING),
++        "no": ((MSG_CONFIRM_TIMEOUT,), State.IDLE),
++        "talk": ((), State.CONFIRMING),
++    },
++    "CONFIRMING_CHANGE": {
++        "navp": ((), State.CONFIRMING),
++        "navc": ((SWITCH_ELEV,), State.CONFIRMING),
++        "wait": ((RESUMED_ROOM,), State.NAVIGATING),
++        "finish": ((MSG_CANCEL_CONFIRM,), State.CONFIRMING),
++        "cancel": ((MSG_CANCEL_CONFIRM,), State.CONFIRMING),
++        "pause": ((MSG_PAUSED,), State.PAUSED),
++        "resume": ((RESUMED_ROOM,), State.NAVIGATING),
++        "yes": ((START_TOILET,), State.NAVIGATING),
++        "no": ((RESUMED_ROOM,), State.NAVIGATING),
++        "talk": ((), State.CONFIRMING),
++    },
++    "NAVIGATING": {
++        "navp": ((), State.CONFIRMING),
++        "navc": ((ASK_ELEV,), State.CONFIRMING),
++        "wait": ((MSG_PAUSED,), State.PAUSED),
++        "finish": ((MSG_CANCEL_CONFIRM,), State.NAVIGATING),
++        "cancel": ((MSG_CANCEL_CONFIRM,), State.NAVIGATING),
++        "pause": ((MSG_PAUSED,), State.PAUSED),
++        "resume": ((GOING_ROOM,), State.NAVIGATING),
++        "yes": ((), State.NAVIGATING),
++        "no": ((), State.NAVIGATING),
++        "talk": ((), State.NAVIGATING),
++    },
++    "PAUSED": {
++        "navp": ((), State.CONFIRMING),
++        "navc": ((START_ELEV,), State.NAVIGATING),
++        "wait": ((MSG_PAUSED,), State.PAUSED),
++        "finish": ((MSG_CANCEL_CONFIRM,), State.PAUSED),
++        "cancel": ((MSG_CANCEL_CONFIRM,), State.PAUSED),
++        "pause": ((MSG_PAUSED,), State.PAUSED),
++        "resume": ((RESUMED_ROOM,), State.NAVIGATING),
++        "yes": ((), State.PAUSED),
++        "no": ((), State.PAUSED),
++        "talk": ((), State.PAUSED),
++    },
++    "FAILED": {
++        "navp": ((), State.CONFIRMING),
++        "navc": ((START_ELEV,), State.NAVIGATING),
++        "wait": ((), State.FAILED),
++        "finish": ((), State.FAILED),
++        "cancel": ((MSG_NOT_NAVIGATING,), State.FAILED),
++        "pause": ((MSG_NOT_NAVIGATING,), State.FAILED),
++        "resume": ((MSG_NOT_PAUSED,), State.FAILED),
++        "yes": ((), State.FAILED),
++        "no": ((), State.FAILED),
++        "talk": ((), State.FAILED),
++    },
++    "ARRIVED": {
++        "navp": ((), State.CONFIRMING),
++        "navc": ((START_ELEV,), State.NAVIGATING),
++        "wait": ((), State.ARRIVED),
++        "finish": ((), State.ARRIVED),
++        "cancel": ((MSG_NOT_NAVIGATING,), State.ARRIVED),
++        "pause": ((MSG_NOT_NAVIGATING,), State.ARRIVED),
++        "resume": ((MSG_NOT_PAUSED,), State.ARRIVED),
++        "yes": ((), State.ARRIVED),
++        "no": ((), State.ARRIVED),
++        "talk": ((), State.ARRIVED),
++    },
++    "ASKING_NEXT": {
++        "navp": ((), State.CONFIRMING),
++        "navc": ((START_ELEV,), State.NAVIGATING),
++        "wait": ((MSG_WAIT_DEFAULT,), State.WAITING),
++        "finish": ((MSG_FINISH,), State.RETURNING),
++        "cancel": ((MSG_FINISH,), State.RETURNING),
++        "pause": ((MSG_WAKE_GREETING,), State.ASKING_NEXT),
++        "resume": ((MSG_WAIT_FINISH_ASK,), State.ASKING_NEXT),
++        "yes": ((MSG_WAIT_DEFAULT,), State.WAITING),
++        "no": ((MSG_ASK_ENTRANCE,), State.ASKING_NEXT),
++        "talk": ((), State.ASKING_NEXT),
++    },
++    "ASKING_WAIT_TIME": {
++        "navp": ((), State.CONFIRMING),
++        "navc": ((START_ELEV,), State.NAVIGATING),
++        "wait": ((MSG_ASK_WAIT_TIME,), State.ASKING_WAIT_TIME),
++        "finish": ((MSG_FINISH,), State.RETURNING),
++        "cancel": ((MSG_FINISH,), State.RETURNING),
++        "pause": ((MSG_WAKE_GREETING,), State.ASKING_WAIT_TIME),
++        "resume": ((MSG_WAIT_FINISH_ASK,), State.ASKING_NEXT),
++        "yes": ((MSG_ASK_WAIT_TIME,), State.ASKING_WAIT_TIME),
++        "no": ((MSG_ASK_ENTRANCE,), State.ASKING_NEXT),
++        "talk": ((), State.ASKING_WAIT_TIME),
++    },
++    "WAITING_RELEASE": {
++        "navp": ((), State.CONFIRMING),
++        "navc": ((START_ELEV,), State.NAVIGATING),
++        "wait": ((M2_RIGHT_10,), State.WAITING_RELEASE),
++        "finish": ((MSG_WAIT_FINISH_ASK,), State.WAITING_RELEASE),
++        "cancel": ((MSG_ASK_ENTRANCE,), State.ASKING_NEXT),
++        "pause": ((MSG_WAKE_GREETING,), State.WAITING_RELEASE),
++        "resume": ((MSG_WAIT_FINISH_ASK,), State.WAITING_RELEASE),
++        "yes": ((), State.WAITING_RELEASE),
++        "no": ((MSG_ASK_ENTRANCE,), State.ASKING_NEXT),
++        "talk": ((), State.WAITING_RELEASE),
++    },
++    "MOVING_TO_WAIT_SPOT": {
++        "navp": ((), State.MOVING_TO_WAIT_SPOT),
++        "navc": ((), State.MOVING_TO_WAIT_SPOT),
++        "wait": ((), State.MOVING_TO_WAIT_SPOT),
++        "finish": ((), State.MOVING_TO_WAIT_SPOT),
++        "cancel": ((MSG_NOT_NAVIGATING,), State.MOVING_TO_WAIT_SPOT),
++        "pause": ((MSG_NOT_NAVIGATING,), State.MOVING_TO_WAIT_SPOT),
++        "resume": ((MSG_NOT_PAUSED,), State.MOVING_TO_WAIT_SPOT),
++        "yes": ((), State.MOVING_TO_WAIT_SPOT),
++        "no": ((), State.MOVING_TO_WAIT_SPOT),
++        "talk": ((), State.MOVING_TO_WAIT_SPOT),
++    },
++    "WAITING": {
++        "navp": ((), State.CONFIRMING),
++        "navc": ((START_ELEV,), State.NAVIGATING),
++        "wait": ((M2_RIGHT_10,), State.WAITING),
++        "finish": ((MSG_WAIT_FINISH_ASK,), State.WAITING),
++        "cancel": ((NEED_ASK,), State.WAITING),
++        "pause": ((MSG_NOT_NAVIGATING,), State.WAITING),
++        "resume": ((MSG_WAIT_FINISH_ASK,), State.WAITING),
++        "yes": ((), State.WAITING),
++        "no": ((), State.WAITING),
++        "talk": ((), State.WAITING),
++    },
++    "WAITING_ASKED": {
++        "navp": ((), State.CONFIRMING),
++        "navc": ((START_ELEV,), State.NAVIGATING),
++        "wait": ((M2_RIGHT_10,), State.WAITING),
++        "finish": ((MSG_FINISH,), State.RETURNING),
++        "cancel": ((NEED_ASK,), State.WAITING),
++        "pause": ((MSG_NOT_NAVIGATING,), State.WAITING),
++        "resume": ((MSG_WAIT_FINISH_ASK,), State.WAITING),
++        "yes": ((MSG_WAIT_FINISH_ASK,), State.WAITING),
++        "no": ((MSG_FINISH,), State.RETURNING),
++        "talk": ((), State.WAITING),
++    },
++    "MOVING_BACK_TO_DEST": {
++        "navp": ((), State.MOVING_BACK_TO_DEST),
++        "navc": ((), State.MOVING_BACK_TO_DEST),
++        "wait": ((), State.MOVING_BACK_TO_DEST),
++        "finish": ((), State.MOVING_BACK_TO_DEST),
++        "cancel": ((MSG_NOT_NAVIGATING,), State.MOVING_BACK_TO_DEST),
++        "pause": ((MSG_NOT_NAVIGATING,), State.MOVING_BACK_TO_DEST),
++        "resume": ((MSG_NOT_PAUSED,), State.MOVING_BACK_TO_DEST),
++        "yes": ((), State.MOVING_BACK_TO_DEST),
++        "no": ((), State.MOVING_BACK_TO_DEST),
++        "talk": ((), State.MOVING_BACK_TO_DEST),
++    },
++    "APPROACHING": {
++        "navp": ((), State.APPROACHING),
++        "navc": ((MSG_APPROACH_BUSY,), State.APPROACHING),
++        "wait": ((), State.APPROACHING),
++        "finish": ((), State.APPROACHING),
++        "cancel": ((MSG_NOT_NAVIGATING,), State.APPROACHING),
++        "pause": ((MSG_NOT_NAVIGATING,), State.APPROACHING),
++        "resume": ((MSG_NOT_PAUSED,), State.APPROACHING),
++        "yes": ((), State.APPROACHING),
++        "no": ((), State.APPROACHING),
++        "talk": ((), State.APPROACHING),
++    },
++    "AWAITING_USER": {
++        "navp": ((MSG_APPROACH_ACCEPTED,), State.TURNING),
++        "navc": ((MSG_APPROACH_ACCEPTED,), State.TURNING),
++        "wait": ((), State.AWAITING_USER),
++        "finish": ((), State.AWAITING_USER),
++        "cancel": ((MSG_APPROACH_DECLINED,), State.RETURNING),
++        "pause": ((MSG_WAKE_GREETING,), State.AWAITING_USER),
++        "resume": ((MSG_WAKE_GREETING,), State.AWAITING_USER),
++        "yes": ((MSG_APPROACH_ACCEPTED,), State.TURNING),
++        "no": ((MSG_APPROACH_DECLINED,), State.RETURNING),
++        "talk": ((), State.AWAITING_USER),
++    },
++    "TURNING": {
++        "navp": ((), State.TURNING),
++        "navc": ((), State.TURNING),
++        "wait": ((), State.TURNING),
++        "finish": ((), State.TURNING),
++        "cancel": ((MSG_NOT_NAVIGATING,), State.TURNING),
++        "pause": ((MSG_NOT_NAVIGATING,), State.TURNING),
++        "resume": ((MSG_NOT_PAUSED,), State.TURNING),
++        "yes": ((), State.TURNING),
++        "no": ((), State.TURNING),
++        "talk": ((), State.TURNING),
++    },
++    "SEEKING": {
++        "navp": ((), State.SEEKING),
++        "navc": ((MSG_APPROACH_BUSY,), State.SEEKING),
++        "wait": ((), State.SEEKING),
++        "finish": ((), State.SEEKING),
++        "cancel": ((MSG_NOT_NAVIGATING,), State.SEEKING),
++        "pause": ((MSG_NOT_NAVIGATING,), State.SEEKING),
++        "resume": ((MSG_NOT_PAUSED,), State.SEEKING),
++        "yes": ((), State.SEEKING),
++        "no": ((), State.SEEKING),
++        "talk": ((), State.SEEKING),
++    },
++    "RETURNING": {
++        "navp": ((), State.CONFIRMING),
++        "navc": ((START_ELEV,), State.NAVIGATING),
++        "wait": ((M2P_FRONT,), State.MOVING_BACK_TO_DEST),
++        "finish": ((MSG_FINISH,), State.RETURNING),
++        "cancel": ((MSG_NOT_NAVIGATING,), State.RETURNING),
++        "pause": ((MSG_WAKE_GREETING,), State.IDLE),
++        "resume": ((MSG_NOT_PAUSED,), State.RETURNING),
++        "yes": ((), State.RETURNING),
++        "no": ((), State.RETURNING),
++        "talk": ((), State.RETURNING),
++    },
++    "RETURNING_LATE": {
++        "navp": ((), State.CONFIRMING),
++        "navc": ((START_ELEV,), State.NAVIGATING),
++        "wait": ((M2P_FRONT,), State.MOVING_BACK_TO_DEST),
++        "finish": ((MSG_FINISH,), State.RETURNING),
++        "cancel": ((MSG_NOT_NAVIGATING,), State.RETURNING),
++        "pause": ((MSG_WAKE_GREETING,), State.IDLE),
++        "resume": ((MSG_NOT_PAUSED,), State.RETURNING),
++        "yes": ((M2P_FRONT,), State.MOVING_BACK_TO_DEST),
++        "no": ((MSG_FINISH,), State.RETURNING),
++        "talk": ((), State.RETURNING),
++    },
++    "ESTOPPED": {
++        "navp": ((MSG_ESTOP_REJECT,), State.ESTOPPED),
++        "navc": ((MSG_ESTOP_REJECT,), State.ESTOPPED),
++        "wait": ((), State.ESTOPPED),
++        "finish": ((), State.ESTOPPED),
++        "cancel": ((MSG_ESTOP_REJECT,), State.ESTOPPED),
++        "pause": ((MSG_ESTOP_REJECT,), State.ESTOPPED),
++        "resume": ((MSG_ESTOP_REJECT,), State.ESTOPPED),
++        "yes": ((), State.ESTOPPED),
++        "no": ((), State.ESTOPPED),
++        "talk": ((), State.ESTOPPED),
++    },
++}
++
++PENDING = {
++    # Task 3
++    "ASKING_NEXT.pause": 3,
++    "ASKING_WAIT_TIME.pause": 3,
++    "AWAITING_USER.pause": 3,
++    "CONFIRMING.pause": 3,
++    "PAUSED.pause": 3,
++    "RETURNING.pause": 3,
++    "RETURNING_LATE.pause": 3,
++    "WAITING_RELEASE.pause": 3,
++    # Task 4
++    "CONFIRMING.wait": 4,
++    "CONFIRMING_CHANGE.wait": 4,
++    "IDLE.wait": 4,
++    "NAVIGATING.wait": 4,
++    "PAUSED.wait": 4,
++    "WAITING.wait": 4,
++    "WAITING_ASKED.wait": 4,
++    "WAITING_RELEASE.wait": 4,
++    # Task 5
++    "CONFIRMING.finish": 5,
++    "CONFIRMING_CHANGE.finish": 5,
++    "IDLE.finish": 5,
++    "NAVIGATING.finish": 5,
++    "PAUSED.finish": 5,
++    # Task 6
++    "ASKING_NEXT.resume": 6,
++    "ASKING_WAIT_TIME.resume": 6,
++    "AWAITING_USER.resume": 6,
++    "CONFIRMING.resume": 6,
++    "NAVIGATING.resume": 6,
++    "WAITING.resume": 6,
++    "WAITING_ASKED.resume": 6,
++    "WAITING_RELEASE.resume": 6,
++    # Task 7
++    "ASKING_WAIT_TIME.no": 7,
++    "AWAITING_USER.cancel": 7,
++    "CONFIRMING.cancel": 7,
++    "WAITING_ASKED.no": 7,
++    "WAITING_RELEASE.cancel": 7,
++    "WAITING_RELEASE.no": 7,
++    # Task 8
++    "WAITING.cancel": 8,
++    "WAITING_ASKED.cancel": 8,
++    # Task 9
++    "IDLE_BRAKED.finish": 9,
++    "IDLE_BRAKED.resume": 9,
++    "IDLE_BRAKED.wait": 9,
++    "IDLE_BRAKED_SPOT.finish": 9,
++    "IDLE_BRAKED_SPOT.resume": 9,
++    "IDLE_BRAKED_SPOT.wait": 9,
++    "RETURNING.finish": 9,
++    "RETURNING.wait": 9,
++    "RETURNING_LATE.finish": 9,
++    "RETURNING_LATE.no": 9,
++    "RETURNING_LATE.wait": 9,
++    "RETURNING_LATE.yes": 9,
++    # Task 10
++    "ASKING_WAIT_TIME.yes": 10,
++    "CONFIRMING.navc": 10,
++    "CONFIRMING_CHANGE.navc": 10,
++    # Task 11
++    "AWAITING_USER.navc": 11,
++    "AWAITING_USER.navp": 11,
++    "TURNING.navc": 11,
++    # Task 12
++    "WAITING_ASKED.yes": 12,
++}
++
++
++def _cases():
++    for row, cells in EXPECT.items():
++        for col in COLS:
++            key = f"{row}.{col}"
++            marks = ()
++            if key in PENDING:
++                marks = (pytest.mark.xfail(strict=True, reason=f"Task {PENDING[key]}"),)
++            yield pytest.param(row, col, id=key, marks=marks)
++
++
++def test_table_covers_every_state_and_request():
++    """새 상태·새 요청이 생기면 표에서 빠지지 않게."""
++    reached = set()
++    for row, build in ROWS.items():
++        logic, _ = build()
++        reached.add(logic.state)
++        assert set(EXPECT[row]) == set(COLS), row
++    assert reached == set(State)
++    assert set(EXPECT) == set(ROWS)
++    assert set(REQUESTS) == set(COLS)
++    assert set(PENDING) <= {f"{r}.{c}" for r in EXPECT for c in COLS}
++
++
++@pytest.mark.parametrize("row,col", list(_cases()))
++def test_reaction(row, col):
++    logic, now = ROWS[row]()
++    actions = logic.on_voice_intent(REQUESTS[col], now, lookup, BOUNDS, True)
++    says = tuple(a.text for a in actions if isinstance(a, Say))
++    expected_says, expected_state = EXPECT[row][col]
++    assert (says, logic.state) == (expected_says, expected_state)

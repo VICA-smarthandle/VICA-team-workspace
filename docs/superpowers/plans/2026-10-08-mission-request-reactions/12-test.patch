@@ -1,0 +1,192 @@
+diff --git a/src/vica_mission_manager/test/test_arrival_dialog.py b/src/vica_mission_manager/test/test_arrival_dialog.py
+index 60a707d..408ce6d 100644
+--- a/src/vica_mission_manager/test/test_arrival_dialog.py
++++ b/src/vica_mission_manager/test/test_arrival_dialog.py
+@@ -141,9 +141,11 @@ class TestFinishAndNext:
+ 
+ class TestNoAnswerLadder:
+     def test_unknown_retries_once_then_leaves(self):
++        """못 알아들은 답에는 질문 자체를 한 번 더 묻는다(2026-10-08 다시 묻기 — 옛 문장은
++        "잘 듣지 못했습니다. 계속 안내가 필요하시면 말씀해 주세요.")."""
+         logic = arrive("restroom")
+         acts = logic.on_arrival_answer(_intent("unknown"), 3.0)
+-        assert MSG_ARRIVAL_RETRY in _say(acts)
++        assert _say(acts) == [MSG_ASK_RESTROOM]
+         assert logic.state == State.ASKING_NEXT       # 아직 안 떠남
+         logic.on_arrival_question_spoken(4.0)
+         acts2 = logic.on_arrival_answer(_intent("unknown"), 5.0)
+@@ -495,13 +497,15 @@ class TestAskWaitTimeRejectsYesNo:
+         logic = self._to_wait_time()
+         acts = logic.on_arrival_answer(_intent("affirm"), 5.0)
+         assert logic.state == State.ASKING_WAIT_TIME       # 홈에 안 감
+-        assert MSG_ARRIVAL_RETRY in _say(acts)
++        assert _say(acts) == [MSG_ASK_WAIT_TIME]           # 질문 자체를 다시(2026-10-08)
+ 
+     def test_deny_reasks(self):
++        """이 경로(on_arrival_answer 직접)는 옛 그물이다 — 음성 요청은 on_voice_intent 가
++        "여기까지 안내를 마칠까요?"로 받는다(test_reaction_table)."""
+         logic = self._to_wait_time()
+         acts = logic.on_arrival_answer(_intent("deny"), 5.0)
+         assert logic.state == State.ASKING_WAIT_TIME       # 30분 대기도 안 함
+-        assert MSG_ARRIVAL_RETRY in _say(acts)
++        assert _say(acts) == [MSG_ASK_WAIT_TIME]
+ 
+ 
+ class TestAskingStuckFallback:
+diff --git a/src/vica_mission_manager/test/test_destination_change.py b/src/vica_mission_manager/test/test_destination_change.py
+index ec0e035..378a6a7 100644
+--- a/src/vica_mission_manager/test/test_destination_change.py
++++ b/src/vica_mission_manager/test/test_destination_change.py
+@@ -129,7 +129,10 @@ class TestAnswers:
+         assert navs[0].tree == NAV_TREE_GUIDED
+ 
+     def test_silence_resumes_original(self):
++        """15초 조용하면 한 번 다시 묻고(2026-10-08 다시 묻기), 30초면 원래 목적지로."""
+         logic, _ = asked_change(t=1.0)
++        assert logic.on_tick(15.9, NavStatus.NONE) == []
++        assert _say(logic.on_tick(16.0, NavStatus.NONE)) == ["화장실로 안내해드릴까요?"]
+         assert logic.on_tick(1.0 + logic.confirm_timeout_sec - 0.1, NavStatus.NONE) == []
+         actions = logic.on_tick(1.0 + logic.confirm_timeout_sec, NavStatus.NONE)
+         assert logic.state == State.NAVIGATING and logic.active_destination == ROOM
+diff --git a/src/vica_mission_manager/test/test_mission_logic.py b/src/vica_mission_manager/test/test_mission_logic.py
+index 585ea37..6f21daa 100644
+--- a/src/vica_mission_manager/test/test_mission_logic.py
++++ b/src/vica_mission_manager/test/test_mission_logic.py
+@@ -225,8 +225,12 @@ class TestTransitions:
+         assert any(isinstance(a, Navigate) for a in actions)
+ 
+     def test_confirm_timeout_30s(self):
++        """15초 조용하면 같은 질문을 한 번 더(2026-10-08 다시 묻기), 30초면 접는다."""
+         logic = MissionLogic(confirm_timeout_sec=30.0)
+         logic.on_intent(make_intent(need_confirm=True), make_dest(), BOUNDS, True, 0.0)
++        reask = logic.on_tick(15.0, NavStatus.NONE)
++        assert [a.text for a in reask if isinstance(a, Say)] == [
++            "윤지영 교수님 사무실로 안내해드릴까요?"]
+         assert logic.on_tick(29.9, NavStatus.NONE) == []
+         assert logic.state == State.CONFIRMING
+         actions = logic.on_tick(30.0, NavStatus.NONE)
+@@ -733,10 +737,13 @@ class TestVoiceCancelConfirm:
+         assert logic.cancel_confirm_pending is False
+ 
+     def test_timeout_keeps_navigating(self):
+-        # 응답이 없으면 취소하지 않고 안내를 이어간다.
++        # 응답이 없으면 15초에 한 번 다시 묻고(2026-10-08), 그래도 없으면 취소하지 않고
++        # 안내를 이어간다.
+         logic = MissionLogic()
+         start_navigation(logic)
+         logic.on_cancel_confirm_request(1.0)
++        reask = logic.on_tick(16.0, NavStatus.RUNNING)
++        assert [a.text for a in reask if isinstance(a, Say)] == ["안내를 취소할까요?"]
+         logic.on_tick(1.0 + logic.confirm_timeout_sec + 0.1, NavStatus.RUNNING)
+         assert logic.cancel_confirm_pending is False
+         assert logic.state == State.NAVIGATING
+diff --git a/src/vica_mission_manager/test/test_reaction_rules.py b/src/vica_mission_manager/test/test_reaction_rules.py
+index 26ce239..25a9499 100644
+--- a/src/vica_mission_manager/test/test_reaction_rules.py
++++ b/src/vica_mission_manager/test/test_reaction_rules.py
+@@ -4,8 +4,8 @@
+ """
+ from reaction_states import (BOUNDS, ELEV, ROOM, SPOT_DEST, asking, asking_wait_time,
+                              awaiting_user, confirming, idle_braked, intent, lookup, navigating,
+-                             returning, returning_late, turning, waiting, waiting_asked,
+-                             waiting_release)
++                             paused, returning, returning_late, turning, waiting,
++                             waiting_asked, waiting_release)
+ from vica_mission_manager.mission_logic import (
+     MSG_ALREADY_GOING,
+     MSG_APPROACH_ONBOARDING,
+@@ -300,3 +300,69 @@ def test_unknown_destination_falls_back_to_onboarding():
+                           lookup, BOUNDS, True)
+     assert logic.state == State.TURNING
+     assert _after_turn(logic, t + 4.0)[-1] == MSG_APPROACH_ONBOARDING
++
++
++# ---- Task 12: 다시 묻기 — 질문마다 한 번 -----------------------------------------
++def test_confirm_strange_answer_reasks_once():
++    logic, t = confirming()
++    ask = say_destination(MSG_CONFIRM_PROMPT_FALLBACK, "화장실")
++    assert _says(logic.on_voice_intent(intent("unknown"), t, lookup, BOUNDS, True)) == [ask]
++    assert logic.on_voice_intent(intent("clarify"), t + 3, lookup, BOUNDS, True) == []
++    assert logic.state == State.CONFIRMING
++    # 이상한 답으로 다시 물었으면 15초 침묵에도 또 묻지 않는다 — 질문마다 한 번.
++    assert _says(logic.on_tick(t + 16, NavStatus.NONE)) == []
++
++
++def test_cancel_question_strange_answer_reasks_once():
++    logic, t = navigating()
++    logic.on_voice_intent(intent("cancel"), t, lookup, BOUNDS, True)
++    assert _says(logic.on_voice_intent(intent("unknown"), t + 2, lookup, BOUNDS, True)) == [
++        MSG_CANCEL_CONFIRM]
++    assert logic.on_voice_intent(intent("unknown"), t + 4, lookup, BOUNDS, True) == []
++    assert logic.cancel_confirm_pending
++
++
++def test_cancel_question_while_paused_now_times_out():
++    """예전엔 안내 주행 중에만 취소 확인 시계를 봐서 일시정지 중에 물은 확인이 끝나지 않았다."""
++    logic, t = paused()
++    logic.on_voice_intent(intent("cancel"), t, lookup, BOUNDS, True)
++    assert _says(logic.on_tick(t + 15, NavStatus.NONE)) == [MSG_CANCEL_CONFIRM]
++    logic.on_tick(t + 31, NavStatus.NONE)
++    assert not logic.cancel_confirm_pending and logic.state == State.PAUSED
++
++
++def test_where_question_reasks_once_then_keeps_waiting():
++    logic, t = waiting_asked()           # t-1 에 "네, 어디로 모실까요?"
++    assert _says(logic.on_tick(t + 14.5, NavStatus.NONE)) == [MSG_WAIT_FINISH_ASK]
++    later = logic.on_tick(t + 40, NavStatus.NONE)
++    assert MSG_WAIT_FINISH_ASK not in _says(later)
++    assert logic.state == State.WAITING
++
++
++def test_need_question_silence_reasks_then_keeps_waiting():
++    logic, t = waiting()
++    logic.on_voice_intent(intent("cancel"), t, lookup, BOUNDS, True)
++    assert _says(logic.on_tick(t + 15, NavStatus.NONE)) == [MSG_WAIT_NEED_ASK]
++    assert _says(logic.on_tick(t + 30, NavStatus.NONE)) == [MSG_CANCEL_KEPT]
++    assert logic.state == State.WAITING
++
++
++def test_late_tick_still_reasks_before_folding():
++    """틱이 늦게 와 다시 묻기 시각과 마감이 한 틱에 겹쳐도 먼저 다시 묻고 답할 시간을 남긴다."""
++    logic, t = confirming()
++    acts = logic.on_tick(t + 40, NavStatus.NONE)          # 15초도 30초도 지났다
++    assert _says(acts) == [say_destination(MSG_CONFIRM_PROMPT_FALLBACK, "화장실")]
++    assert logic.state == State.CONFIRMING
++    logic.on_tick(t + 40 + 15, NavStatus.NONE)
++    assert logic.state == State.IDLE
++
++
++def test_llm_clarify_is_not_a_strange_answer():
++    """LLM 이 되묻는 중(clarify)이면 미션은 끼어들지 않는다 — 두 목소리 방지. 못 알아들은
++    답(unknown)만 미션이 질문을 다시 한다."""
++    logic, t = asking()
++    assert logic.on_voice_intent(intent("clarify"), t, lookup, BOUNDS, True) == []
++    assert logic.state == State.ASKING_NEXT
++    logic, t = confirming()
++    assert logic.on_voice_intent(intent("clarify"), t, lookup, BOUNDS, True) == []
++    assert logic.state == State.CONFIRMING
+diff --git a/src/vica_mission_manager/test/test_reaction_table.py b/src/vica_mission_manager/test/test_reaction_table.py
+index f35f18d..5c41daa 100644
+--- a/src/vica_mission_manager/test/test_reaction_table.py
++++ b/src/vica_mission_manager/test/test_reaction_table.py
+@@ -332,8 +332,6 @@ EXPECT = {
+ }
+ 
+ PENDING = {
+-    # Task 12
+-    "WAITING_ASKED.yes": 12,
+ }
+ 
+ 
+diff --git a/src/vica_mission_manager/test/test_wait_spot.py b/src/vica_mission_manager/test/test_wait_spot.py
+index f282ae8..4048f05 100644
+--- a/src/vica_mission_manager/test/test_wait_spot.py
++++ b/src/vica_mission_manager/test/test_wait_spot.py
+@@ -290,6 +290,7 @@ class TestTalkingWhileWaiting:
+         nxt = _dest(id="d2", name="안내소")
+         logic.on_intent(_intent(matched_destination_id="d2", need_confirm=True),
+                         nxt, BOUNDS, True, 20.0)
++        logic.on_tick(20.0 + 15.0, NavStatus.NONE)     # 15초: 같은 질문 한 번 더(2026-10-08)
+         logic.on_tick(20.0 + 31.0, NavStatus.NONE)
+         assert logic.state == State.WAITING
+         logic.on_intent(_intent(matched_destination_id="d2", need_confirm=True),

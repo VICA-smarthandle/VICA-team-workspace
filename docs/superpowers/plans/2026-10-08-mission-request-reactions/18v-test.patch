@@ -1,0 +1,13 @@
+diff --git a/tests/test_mission_phrases.py b/tests/test_mission_phrases.py
+index d267f24..28757a2 100644
+--- a/tests/test_mission_phrases.py
++++ b/tests/test_mission_phrases.py
+@@ -86,6 +86,8 @@ class TestSentences:
+         assert mp.WAIT_NEED_ASK == ml.MSG_WAIT_NEED_ASK
+         assert mp.CONFIRM_SWITCH == ml.MSG_CONFIRM_SWITCH
+         assert mp.WAIT_PLACE_AT_DESTINATION == ml.WAIT_PLACE_AT_DESTINATION
++        assert mp.APPROACH_REASK == ml.MSG_APPROACH_REASK
++        assert replies.APPROACH_QUESTION.endswith(mp.APPROACH_REASK)
+         # 안내 주행 중 "다시 가자"의 답 — 음성 replies.ALREADY_GOING 과 같은 글자.
+         for name in ("409호", "식당", "화장실"):
+             assert ml.say_destination(ml.MSG_ALREADY_GOING, name) == replies.ALREADY_GOING.format(

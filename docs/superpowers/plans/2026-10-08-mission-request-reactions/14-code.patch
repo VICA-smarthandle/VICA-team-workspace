@@ -1,0 +1,102 @@
+diff --git a/src/mission_phrases.py b/src/mission_phrases.py
+index 4de0837..5a679dc 100644
+--- a/src/mission_phrases.py
++++ b/src/mission_phrases.py
+@@ -40,6 +40,10 @@ WAIT_FINISH_ASK = "네, 어디로 모실까요?"
+ # 비상 정지 중 "비카야" — "네?" 없이 이 한 마디만(호출 반응표).
+ ESTOP_WAKE = "지금은 비상 멈춤 상태입니다."
+ 
++# ---- 미션 요청 반응표 (2026-10-08) --------------------------------------------------
++# 대기 중 "취소" — 안내를 끝낼지 묻는다(사용자 결정 3, 사용자 문구).
++WAIT_NEED_ASK = "안내가 필요 없으신가요?"
++
+ # 숫자로 끝나는 이름을 읽을 때 마지막 숫자의 받침(영·일·삼·육·칠·팔 있음, 이·사·오·구 없음).
+ _DIGIT_HAS_BATCHIM = {
+     "0": True, "1": True, "2": False, "3": True, "4": False,
+diff --git a/src/mission_question.py b/src/mission_question.py
+new file mode 100644
+index 0000000..91ee3ed
+--- /dev/null
++++ b/src/mission_question.py
+@@ -0,0 +1,42 @@
++"""미션이 질문 중일 때 LLM 대답을 줄이는 판단 (미션 요청 반응표 2026-10-08, 규칙 2·다시 묻기).
++
++미션은 질문마다 못 알아들은 답(unknown)에 같은 질문을 한 번 다시 한다. 그때 LLM 까지 말하면
++두 목소리가 된다 — 그래서 LLM 의 unknown 대답을 지운다. 접근 질문·돌아서기 중의 목적지 답은
++미션이 수락으로 받고 돌아선 뒤 직접 확인하므로 LLM 의 확인 질문도 지운다. LLM 이 되묻는
++clarify("어느 화장실이요?")는 지우지 않는다 — 미션도 그때는 끼어들지 않는다.
++ros_node 는 rclpy 없이 시험할 수 없어 판단은 여기 순수 함수로 둔다.
++"""
++from __future__ import annotations
++
++from .local_rules import ANSWER_WAIT_STATES
++from .mission_phrases import WAIT_FINISH_ASK, WAIT_NEED_ASK
++from .replies import CANCEL_CONFIRM, WAKE_GREETING
++
++# 대기 중·주행 중에도 미션이 묻는 질문 — dialog_state 만으로는 질문 중인지 모른다.
++MISSION_QUESTIONS = frozenset({WAIT_FINISH_ASK, WAIT_NEED_ASK, CANCEL_CONFIRM})
++# 그 질문의 답을 기다리는 시간 — 음성 질문 뒤 문맥 창(ros_node.FOLLOWUP_CONTEXT_SEC)과 같다.
++ASK_FRESH_SEC = 40.0
++# 미션이 수락 뒤 직접 목적지를 묻는 단계 — LLM 의 확인 질문은 겹친다.
++APPROACH_ANSWER_STATES = frozenset({"awaiting_user", "turning"})
++
++
++def mission_is_asking(dialog_state: str, last_robot_text: str, last_robot_age_sec: float) -> bool:
++    """미션이 사용자 대답을 기다리는 중인가."""
++    if dialog_state in ANSWER_WAIT_STATES:
++        return True
++    return ((last_robot_text or "").strip() in MISSION_QUESTIONS
++            and last_robot_age_sec <= ASK_FRESH_SEC)
++
++
++def quiet_for_mission(intent, dialog_state: str, last_robot_text: str,
++                      last_robot_age_sec: float):
++    """미션이 이어서 말할 자리면 LLM reply 를 비운 intent 를, 아니면 그대로 돌려준다."""
++    if getattr(intent, "safety_flag", "") == "emergency" or not intent.reply:
++        return intent
++    if (intent.intent == "unknown" and intent.reply != WAKE_GREETING
++            and mission_is_asking(dialog_state, last_robot_text, last_robot_age_sec)):
++        return intent.model_copy(update={"reply": ""})
++    if (intent.intent == "navigate" and intent.need_confirm
++            and dialog_state in APPROACH_ANSWER_STATES):
++        return intent.model_copy(update={"reply": ""})
++    return intent
+diff --git a/src/ros_node.py b/src/ros_node.py
+index 0da6f2c..392f7de 100644
+--- a/src/ros_node.py
++++ b/src/ros_node.py
+@@ -42,6 +42,7 @@ from .langchain_intent_parser import (
+     parse_intent, parse_intent_audio)
+ from .ledger_view import render_ledger
+ from .mission_phrases import WAIT_BEACON
++from .mission_question import quiet_for_mission
+ from .llm_backend import BackendState, parse_goal_event
+ from .realtime_intent import audio_turn_applies, get_realtime_client, pcm16_from_audio_msg
+ from .situation_board import SituationBoard, parse_goal_event_name
+@@ -380,6 +381,15 @@ class LlmIntentNode(Node):
+         if self._local and not llm_first:
+             intent = self._apply_misheard_rule(intent, text)
+ 
++        # 2-3) 미션이 질문 중이면 못 알아들은 답에 LLM 은 말하지 않는다 — 미션이 같은 질문을
++        #      한 번 다시 한다. 접근 질문·돌아서기 중 목적지 답의 확인 질문도 미션 몫이다
++        #      (2026-10-08 미션 요청 반응표). 판단은 순수 함수(mission_question)가 한다.
++        last_t, last_text = self._robot_recent[-1] if self._robot_recent else (0.0, "")
++        quieted = quiet_for_mission(intent, self._robot_state.dialog_state, last_text,
++                                    time.time() - last_t)
++        silenced = quieted is not intent
++        intent = quieted
++
+         # 3) VicaIntent 를 커스텀 메시지로 발행한다 (이동 명령이 아니라 '제안').
+         #    resume 제안만 확인 응답("네")까지 보류한다 — should_forward_intent.
+         if should_forward_intent(intent):
+@@ -408,7 +418,9 @@ class LlmIntentNode(Node):
+         # 4) 대화 히스토리를 갱신한다 (다음 발화가 맥락을 기억하도록).
+         #    소리 모드에서는 로봇 줄(AI)을 여기서 넣지 않는다 — 실제로 소리 난 말이
+         #    /vica/tts_done 으로 들어와 _on_tts_done_text 가 넣는다(미션의 질문 포함).
+-        if self._spoken_history:
++        if self._spoken_history or silenced:
++            # 2-3 에서 지운 대답은 기록에 빈 줄로 남기지 않는다 — 물어 둔 질문이 마지막 로봇
++            # 말로 남아야 다음 "네"가 그 질문의 답이 된다.
+             self._history.extend([HumanMessage(text)])
+         else:
+             self._history.extend([HumanMessage(text), AIMessage(intent.reply)])

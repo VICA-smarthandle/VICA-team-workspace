@@ -1,0 +1,28 @@
+diff --git a/src/vica_mission_manager/test/test_reaction_rules.py b/src/vica_mission_manager/test/test_reaction_rules.py
+index 25a9499..b69627f 100644
+--- a/src/vica_mission_manager/test/test_reaction_rules.py
++++ b/src/vica_mission_manager/test/test_reaction_rules.py
+@@ -9,6 +9,7 @@ from reaction_states import (BOUNDS, ELEV, ROOM, SPOT_DEST, asking, asking_wait_
+ from vica_mission_manager.mission_logic import (
+     MSG_ALREADY_GOING,
+     MSG_APPROACH_ONBOARDING,
++    MSG_APPROACH_REASK,
+     MSG_ASK_ENTRANCE,
+     MSG_ASK_WAIT_TIME,
+     MSG_CONFIRM_PROMPT_FALLBACK,
+@@ -366,3 +367,15 @@ def test_llm_clarify_is_not_a_strange_answer():
+     logic, t = confirming()
+     assert logic.on_voice_intent(intent("clarify"), t, lookup, BOUNDS, True) == []
+     assert logic.state == State.CONFIRMING
++
++
++# ---- Task 18 (승인 시): 접근 질문에 못 알아들은 답 -------------------------------------
++def test_approach_strange_answer_reasks_the_short_question_once():
++    logic, t = awaiting_user()
++    acts = logic.on_voice_intent(intent("unknown"), t, lookup, BOUNDS, True)
++    assert [(a.text, a.expects_reply) for a in acts if isinstance(a, Say)] == [
++        (MSG_APPROACH_REASK, True)]
++    assert logic.on_voice_intent(intent("unknown"), t + 3, lookup, BOUNDS, True) == []
++    logic.on_approach_question_spoken(t + 4)       # 노드가 다시 묻기 재생 끝을 알려 준다
++    logic.on_tick(t + 12.5, NavStatus.NONE)
++    assert logic.state != State.AWAITING_USER      # 그래도 답이 없으면 지금처럼 물러난다

@@ -1,0 +1,67 @@
+diff --git a/src/vica_mission_manager/vica_mission_manager/mission_logic.py b/src/vica_mission_manager/vica_mission_manager/mission_logic.py
+index 6bec7ae..4b99e2a 100644
+--- a/src/vica_mission_manager/vica_mission_manager/mission_logic.py
++++ b/src/vica_mission_manager/vica_mission_manager/mission_logic.py
+@@ -535,6 +535,9 @@ MSG_ALREADY_GOING = "지금 {name}{josa} 가는 중이에요."
+ # 들려 쓰지 않는다. 구운 판(assets/baked)과 글자가 같아야 한다.
+ MSG_APPROACH_COMING = "동행로봇 비카가 다가가고 있어요."
+ MSG_APPROACH_QUESTION = "안녕하세요? 시각장애인 안내로봇 비카입니다. 안내를 받으시겠어요?"
++# 접근 질문에 못 알아들은 답 — 인사 없이 끝부분만 한 번 다시 묻는다(2026-10-08 다시 묻기, 새 녹음
++# 문장이라 사용자 승인 뒤에만 쓴다). 음성 mission_phrases.APPROACH_REASK 와 같은 글자.
++MSG_APPROACH_REASK = "안내를 받으시겠어요?"
+ MSG_APPROACH_ACCEPTED = "네, 잠시만 기다려주세요. 로봇이 회전하니 주의하세요."
+ MSG_APPROACH_DECLINED = "알겠습니다. 이만 물러납니다."
+ MSG_APPROACH_ONBOARDING = "저에게 말을 거실 때는 '비카야'라고 불러주세요. 어디로 가고 싶으신가요?"
+@@ -1416,6 +1419,7 @@ class MissionLogic:
+         # 접근 질문·돌아서기 중에 사용자가 말한 목적지(2026-10-08 반응표). 손잡이를 내준 뒤
+         # 온보딩 대신 이 목적지로 확인 질문을 한다. 그때 쓰고 비운다.
+         self._approach_dest: Optional[Destination] = None
++        self._approach_reasked = False   # 접근 질문을 이미 다시 물었나(2026-10-08)
+         # 지금 확인 질문의 문장(2026-10-08 반응표). "다시 가자"·다시 묻기에서 같은 질문을 한다.
+         self._confirm_prompt = ""
+         # 다시 묻기(2026-10-08): 확인 질문·취소 확인을 다시 물을 시각과 이미 다시 물었는지.
+@@ -1805,6 +1809,15 @@ class MissionLogic:
+             return self.on_approach_answer(True, now)
+         if intent.intent == "cancel":
+             return self.on_approach_answer(False, now)
++        if intent.intent == "unknown":
++            # 못 알아들은 답 — "안내를 받으시겠어요?"만 한 번 다시 묻는다. 답 시계는 그 말이 끝난
++            # 뒤 노드가 on_approach_question_spoken 으로 다시 건다. 대답이 없을 때는 다시 묻지
++            # 않는다 — 사람을 잘못 봤을 수 있어 앞을 오래 막지 않는다(2026-10-08 다시 묻기).
++            if self._approach_reasked:
++                return []
++            self._approach_reasked = True
++            self._response_deadline = now + APPROACH_QUESTION_STUCK_SEC
++            return [self._ask(MSG_APPROACH_REASK)]
+         if intent.intent in ("pause", "resume"):
+             self._response_deadline = now + self.approach_response_timeout_sec
+             return [self._ask(MSG_WAKE_GREETING)]
+@@ -2853,6 +2866,7 @@ class MissionLogic:
+         호출 전후로 각자 정한다 — 여기서는 다루지 않는다.
+         """
+         self.state = State.AWAITING_USER
++        self._approach_reasked = False
+         # 여기서는 탈출용 안전망만 건다. 진짜 응답 8초는 질문 재생이 끝난
+         # 시점(on_approach_question_spoken)부터 — 도착 후 대화와 같은 방식.
+         # 큐 시각 기준 8초는 창이 0초가 되는 결함이었다.
+diff --git a/src/vica_mission_manager/vica_mission_manager/mission_manager_node.py b/src/vica_mission_manager/vica_mission_manager/mission_manager_node.py
+index c408ff0..c7c1812 100644
+--- a/src/vica_mission_manager/vica_mission_manager/mission_manager_node.py
++++ b/src/vica_mission_manager/vica_mission_manager/mission_manager_node.py
+@@ -69,6 +69,7 @@ from .mission_logic import (
+     Haptic,
+     MSG_APPROACH_ONBOARDING,
+     MSG_APPROACH_QUESTION,
++    MSG_APPROACH_REASK,
+     MSG_DEST_RETRY,
+     NEAR_CALL_MAX_M,
+     NEAR_CALL_NO_SPIN_M,
+@@ -691,7 +692,7 @@ class MissionManagerNode(Node):
+         다른 멘트(수락·도착 등)의 재생 완료는 응답 대기와 무관하고, 로직 쪽이
+         AWAITING_USER 가 아니면 무시하므로 이중 방어다.
+         """
+-        if MSG_APPROACH_QUESTION in msg.data:
++        if MSG_APPROACH_QUESTION in msg.data or msg.data.strip() == MSG_APPROACH_REASK:
+             self.logic.on_approach_question_spoken(self._now())
+         # 손잡이 힌트는 재생 완료를 기다리지 않는다 — 진동이 힌트와 같은 순간
+         # 시작해 잡을 때까지 이어진다(2026-09-30, 09-11 I-2 장치 폐기).

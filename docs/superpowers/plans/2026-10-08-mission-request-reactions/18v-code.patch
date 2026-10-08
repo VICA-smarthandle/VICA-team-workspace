@@ -1,0 +1,21 @@
+diff --git a/src/mission_phrases.py b/src/mission_phrases.py
+index faf8198..8004ec6 100644
+--- a/src/mission_phrases.py
++++ b/src/mission_phrases.py
+@@ -48,6 +48,8 @@ CONFIRM_SWITCH = "네, {prompt}"
+ # 대기 장소가 없는 목적지로 돌아가 기다릴 때(홈 가는 중 "기다려", 결정 1)의 장소 말 — 미션
+ # WAIT_PLACE_AT_DESTINATION. 대기 장소가 막혔을 때(M6 뒤) 상황판의 말과 같다.
+ WAIT_PLACE_AT_DESTINATION = "입구 앞"
++# 접근 질문에 못 알아들은 답 — 끝부분만 한 번 다시(사용자 승인 뒤에만 쓴다, 미션 MSG_APPROACH_REASK).
++APPROACH_REASK = "안내를 받으시겠어요?"
+ 
+ # 숫자로 끝나는 이름을 읽을 때 마지막 숫자의 받침(영·일·삼·육·칠·팔 있음, 이·사·오·구 없음).
+ _DIGIT_HAS_BATCHIM = {
+@@ -117,6 +119,7 @@ def baked_mission_ments() -> dict[str, str]:
+         "mission_msg_wait_finish_ask": WAIT_FINISH_ASK,
+         # 미션 요청 반응표(2026-10-08) — 대기 중 "취소"의 질문(결정 3).
+         "mission_msg_wait_need_ask": WAIT_NEED_ASK,
++        "mission_msg_approach_reask": APPROACH_REASK,
+     }
+     out.update(wait_spot_sentences())
+     out.update(wait_front_sentences())
